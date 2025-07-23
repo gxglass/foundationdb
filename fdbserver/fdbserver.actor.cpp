@@ -249,19 +249,17 @@ CSimpleOpt::SOption g_rgOptions[] = {
 
 // clang-format on
 
+// FIXME: put these in .h files in case they ever change to get arguments.
 extern void dsltest();
-extern void pingtest();
-extern void copyTest();
 extern void versionedMapTest();
 extern void createTemplateDatabase();
-
 extern const char* getSourceVersion();
-
-extern void flushTraceFileVoid();
+extern void skipListTest();
 
 extern const int MAX_CLUSTER_FILE_BYTES;
 
 bool enableFailures = true;
+extern bool g_crashOnError;
 
 #define test_assert(x)                                                                                                 \
 	if (!(x)) {                                                                                                        \
@@ -529,9 +527,6 @@ ACTOR Future<Void> dumpDatabase(Database cx, std::string outputFilename, KeyRang
 	}
 }
 
-void memoryTest();
-void skipListTest();
-
 Future<Void> startSystemMonitor(std::string dataFolder,
                                 Optional<Standalone<StringRef>> dcId,
                                 Optional<Standalone<StringRef>> zoneId,
@@ -543,8 +538,6 @@ Future<Void> startSystemMonitor(std::string dataFolder,
 	systemMonitor();
 	return recurring(&systemMonitor, SERVER_KNOBS->SYSTEM_MONITOR_FREQUENCY, TaskPriority::FlushTrace);
 }
-
-void testIndexedSet();
 
 #ifdef _WIN32
 void parentWatcher(void* parentHandle) {
@@ -581,9 +574,9 @@ static void printHelpTeaser(const char* name) {
 }
 
 static void printOptionUsage(std::string option, std::string description) {
-	static const std::string OPTION_INDENT("  ");
-	static const std::string DESCRIPTION_INDENT("                ");
-	static const int WIDTH = 80;
+	static constexpr std::string OPTION_INDENT("  ");
+	static constexpr std::string DESCRIPTION_INDENT("                ");
+	static constexpr int WIDTH = 80;
 
 	boost::algorithm::trim(option);
 	boost::algorithm::trim(description);
@@ -801,8 +794,6 @@ static void printUsage(const char* name, bool devhelp) {
 	       "SIZE parameters may use one of the multiplicative suffixes B=1, KB=10^3,\n"
 	       "KiB=2^10, MB=10^6, MiB=2^20, GB=10^9, GiB=2^30, TB=10^12, or TiB=2^40.\n");
 }
-
-extern bool g_crashOnError;
 
 #if defined(ALLOC_INSTRUMENTATION) || defined(ALLOC_INSTRUMENTATION_STDOUT)
 void* operator new(std::size_t size) {
