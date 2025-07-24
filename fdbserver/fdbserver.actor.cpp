@@ -574,9 +574,9 @@ static void printHelpTeaser(const char* name) {
 }
 
 static void printOptionUsage(std::string option, std::string description) {
-	static constexpr std::string OPTION_INDENT("  ");
-	static constexpr std::string DESCRIPTION_INDENT("                ");
-	static constexpr int WIDTH = 80;
+	static const std::string OPTION_INDENT("  ");
+	static const std::string DESCRIPTION_INDENT("                ");
+	static const int WIDTH = 80;
 
 	boost::algorithm::trim(option);
 	boost::algorithm::trim(description);
