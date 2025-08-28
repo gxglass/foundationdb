@@ -179,7 +179,6 @@ public:
 
 	virtual double now() const = 0;
 	// Provides a clock that advances at a similar rate on all connected endpoints
-	// FIXME: Return a fixed point Time class
 
 	virtual double timer() = 0;
 	// A wrapper for directly getting the system time. The time returned by now() only updates in the run loop,
