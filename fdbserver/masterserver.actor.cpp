@@ -679,8 +679,6 @@ ACTOR Future<Void> masterServer(MasterInterface mi,
 		}
 	}
 
-	state Future<Void> onDBChange = Void();
-	wait(onDBChange);
 	wait(masterServerImpl(mi, db, ccInterface, coordinators, lifetime, forceRecovery));
 	return Void();
 }
