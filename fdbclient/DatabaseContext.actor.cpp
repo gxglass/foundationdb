@@ -1799,3 +1799,406 @@ DatabaseContext::~DatabaseContext() {
 
 	DisabledTraceEvent("DatabaseContextDestructed", dbId).backtrace();
 }
+
+ACTOR Future<Void> handleShutdown(DatabaseContext* db) {
+	try {
+		wait(db->storage->getError());
+	} catch (Error& e) {
+		TraceEvent("ChangeFeedCacheDiskError").error(e);
+	}
+	db->initializeChangeFeedCache = Void();
+	db->storage = nullptr;
+	db->changeFeedStorageCommitter = Void();
+	return Void();
+}
+
+void DatabaseContext::setStorage(IKeyValueStore* store) {
+	if (storage != nullptr) {
+		TraceEvent(SevError, "NativeClientMultipleSetStorage");
+		return;
+	}
+	storage = store;
+	commitChangeFeedStorage = makeReference<AsyncVar<bool>>(false);
+	initializeChangeFeedCache = initializeCFCache(this);
+	changeFeedStorageCommitter = changeFeedCommitter(storage, commitChangeFeedStorage, &uncommittedCFBytes) &&
+	                             cleanupChangeFeedCache(this) && handleShutdown(this);
+}
+
+Reference<ChangeFeedStorageData> DatabaseContext::getStorageData(StorageServerInterface interf) {
+	// use token from interface since that changes on SS restart
+	UID token = interf.waitFailure.getEndpoint().token;
+	auto it = changeFeedUpdaters.find(token);
+	if (it == changeFeedUpdaters.end()) {
+		Reference<ChangeFeedStorageData> newStorageUpdater = makeReference<ChangeFeedStorageData>();
+		newStorageUpdater->id = interf.id();
+		newStorageUpdater->interfToken = token;
+		newStorageUpdater->updater = storageFeedVersionUpdater(interf, newStorageUpdater.getPtr());
+		newStorageUpdater->context = this;
+		newStorageUpdater->created = now();
+		changeFeedUpdaters[token] = newStorageUpdater.getPtr();
+		return newStorageUpdater;
+	}
+	return Reference<ChangeFeedStorageData>::addRef(it->second);
+}
+
+Version DatabaseContext::getMinimumChangeFeedVersion() {
+	Version minVersion = std::numeric_limits<Version>::max();
+	for (auto& it : changeFeedUpdaters) {
+		if (now() - it.second->created > CLIENT_KNOBS->CHANGE_FEED_START_INTERVAL) {
+			minVersion = std::min(minVersion, it.second->version.get());
+		}
+	}
+	for (auto& it : notAtLatestChangeFeeds) {
+		if (now() - it.second->created > CLIENT_KNOBS->CHANGE_FEED_START_INTERVAL) {
+			minVersion = std::min(minVersion, it.second->getVersion());
+		}
+	}
+	return minVersion;
+}
+
+void DatabaseContext::setDesiredChangeFeedVersion(Version v) {
+	for (auto& it : changeFeedUpdaters) {
+		if (it.second->version.get() < v && it.second->desired.get() < v) {
+			it.second->desired.set(v);
+		}
+	}
+}
+
+Optional<KeyRangeLocationInfo> DatabaseContext::getCachedLocation(const TenantInfo& tenant,
+                                                                  const KeyRef& key,
+                                                                  Reverse isBackward) {
+	Arena arena;
+	KeyRef resolvedKey = key;
+
+	if (tenant.hasTenant()) {
+		CODE_PROBE(true, "Database context get cached location with tenant");
+		resolvedKey = resolvedKey.withPrefix(tenant.prefix.get(), arena);
+	}
+
+	auto range =
+	    isBackward ? locationCache.rangeContainingKeyBefore(resolvedKey) : locationCache.rangeContaining(resolvedKey);
+	if (range->value()) {
+		return KeyRangeLocationInfo(toPrefixRelativeRange(range->range(), tenant.prefix), range->value());
+	}
+
+	return Optional<KeyRangeLocationInfo>();
+}
+
+bool DatabaseContext::getCachedLocations(const TenantInfo& tenant,
+                                         const KeyRangeRef& range,
+                                         std::vector<KeyRangeLocationInfo>& result,
+                                         int limit,
+                                         Reverse reverse) {
+	result.clear();
+
+	Arena arena;
+	KeyRangeRef resolvedRange = range;
+
+	if (tenant.hasTenant()) {
+		CODE_PROBE(true, "Database context get cached locations with tenant");
+		resolvedRange = resolvedRange.withPrefix(tenant.prefix.get(), arena);
+	}
+
+	auto begin = locationCache.rangeContaining(resolvedRange.begin);
+	auto end = locationCache.rangeContainingKeyBefore(resolvedRange.end);
+
+	loop {
+		auto r = reverse ? end : begin;
+		if (!r->value()) {
+			CODE_PROBE(result.size(), "had some but not all cached locations");
+			result.clear();
+			return false;
+		}
+		result.emplace_back(toPrefixRelativeRange(r->range() & resolvedRange, tenant.prefix), r->value());
+		if (result.size() == limit || begin == end) {
+			break;
+		}
+
+		if (reverse)
+			--end;
+		else
+			++begin;
+	}
+
+	return true;
+}
+
+Reference<LocationInfo> DatabaseContext::setCachedLocation(const KeyRangeRef& absoluteKeys,
+                                                           const std::vector<StorageServerInterface>& servers) {
+	std::vector<Reference<ReferencedInterface<StorageServerInterface>>> serverRefs;
+	serverRefs.reserve(servers.size());
+	for (const auto& interf : servers) {
+		serverRefs.push_back(StorageServerInfo::getInterface(this, interf, clientLocality));
+	}
+
+	int maxEvictionAttempts = 100, attempts = 0;
+	auto loc = makeReference<LocationInfo>(serverRefs);
+	while (locationCache.size() > locationCacheSize && attempts < maxEvictionAttempts) {
+		CODE_PROBE(true, "NativeAPI storage server locationCache entry evicted");
+		attempts++;
+		auto r = locationCache.randomRange();
+		Key begin = r.begin(), end = r.end(); // insert invalidates r, so can't be passed a mere reference into it
+		locationCache.insert(KeyRangeRef(begin, end), Reference<LocationInfo>());
+	}
+	locationCache.insert(absoluteKeys, loc);
+	return loc;
+}
+
+void DatabaseContext::invalidateCache(const Optional<KeyRef>& tenantPrefix, const KeyRef& key, Reverse isBackward) {
+	Arena arena;
+	KeyRef resolvedKey = key;
+	if (tenantPrefix.present() && !tenantPrefix.get().empty()) {
+		CODE_PROBE(true, "Database context invalidate cache for tenant key");
+		resolvedKey = resolvedKey.withPrefix(tenantPrefix.get(), arena);
+	}
+
+	if (isBackward) {
+		locationCache.rangeContainingKeyBefore(resolvedKey)->value() = Reference<LocationInfo>();
+	} else {
+		locationCache.rangeContaining(resolvedKey)->value() = Reference<LocationInfo>();
+	}
+}
+
+void DatabaseContext::invalidateCache(const Optional<KeyRef>& tenantPrefix, const KeyRangeRef& keys) {
+	Arena arena;
+	KeyRangeRef resolvedKeys = keys;
+	if (tenantPrefix.present() && !tenantPrefix.get().empty()) {
+		CODE_PROBE(true, "Database context invalidate cache for tenant range");
+		resolvedKeys = resolvedKeys.withPrefix(tenantPrefix.get(), arena);
+	}
+
+	auto rs = locationCache.intersectingRanges(resolvedKeys);
+	Key begin = rs.begin().begin(),
+	    end = rs.end().begin(); // insert invalidates rs, so can't be passed a mere reference into it
+	locationCache.insert(KeyRangeRef(begin, end), Reference<LocationInfo>());
+}
+
+void DatabaseContext::setFailedEndpointOnHealthyServer(const Endpoint& endpoint) {
+	if (failedEndpointsOnHealthyServersInfo.find(endpoint) == failedEndpointsOnHealthyServersInfo.end()) {
+		failedEndpointsOnHealthyServersInfo[endpoint] =
+		    EndpointFailureInfo{ .startTime = now(), .lastRefreshTime = now() };
+	}
+}
+
+void DatabaseContext::updateFailedEndpointRefreshTime(const Endpoint& endpoint) {
+	if (failedEndpointsOnHealthyServersInfo.find(endpoint) == failedEndpointsOnHealthyServersInfo.end()) {
+		// The endpoint is not failed. Nothing to update.
+		return;
+	}
+	failedEndpointsOnHealthyServersInfo[endpoint].lastRefreshTime = now();
+}
+
+Optional<EndpointFailureInfo> DatabaseContext::getEndpointFailureInfo(const Endpoint& endpoint) {
+	if (failedEndpointsOnHealthyServersInfo.find(endpoint) == failedEndpointsOnHealthyServersInfo.end()) {
+		return Optional<EndpointFailureInfo>();
+	}
+	return failedEndpointsOnHealthyServersInfo[endpoint];
+}
+
+void DatabaseContext::clearFailedEndpointOnHealthyServer(const Endpoint& endpoint) {
+	failedEndpointsOnHealthyServersInfo.erase(endpoint);
+}
+
+Future<Void> DatabaseContext::onProxiesChanged() {
+	backoffDelay = 0.0;
+	return this->proxiesChangeTrigger.onTrigger();
+}
+
+bool DatabaseContext::sampleReadTags() const {
+	double sampleRate = globalConfig->get(transactionTagSampleRate, CLIENT_KNOBS->READ_TAG_SAMPLE_RATE);
+	return sampleRate > 0 && deterministicRandom()->random01() <= sampleRate;
+}
+
+bool DatabaseContext::sampleOnCost(uint64_t cost) const {
+	double sampleCost = globalConfig->get<double>(transactionTagSampleCost, CLIENT_KNOBS->COMMIT_SAMPLE_COST);
+	if (sampleCost <= 0)
+		return false;
+	return deterministicRandom()->random01() <= (double)cost / sampleCost;
+}
+
+void validateOptionValuePresent(Optional<StringRef> value) {
+	if (!value.present()) {
+		throw invalid_option_value();
+	}
+}
+
+void validateOptionValueNotPresent(Optional<StringRef> value) {
+	if (value.present() && value.get().size() > 0) {
+		throw invalid_option_value();
+	}
+}
+
+int64_t extractIntOption(Optional<StringRef> value, int64_t minValue, int64_t maxValue) {
+	validateOptionValuePresent(value);
+	if (value.get().size() != 8) {
+		throw invalid_option_value();
+	}
+
+	int64_t passed = *((int64_t*)(value.get().begin()));
+	if (passed > maxValue || passed < minValue) {
+		throw invalid_option_value();
+	}
+
+	return passed;
+}
+
+uint64_t extractHexOption(StringRef value) {
+	char* end;
+	uint64_t id = strtoull(value.toString().c_str(), &end, 16);
+	if (*end)
+		throw invalid_option_value();
+	return id;
+}
+
+void DatabaseContext::setOption(FDBDatabaseOptions::Option option, Optional<StringRef> value) {
+	int defaultFor = FDBDatabaseOptions::optionInfo.getMustExist(option).defaultFor;
+	if (defaultFor >= 0) {
+		ASSERT(FDBTransactionOptions::optionInfo.find((FDBTransactionOptions::Option)defaultFor) !=
+		       FDBTransactionOptions::optionInfo.end());
+		TraceEvent(SevDebug, "DatabaseContextSetPersistentOption").detail("Option", option).detail("Value", value);
+		transactionDefaults.addOption((FDBTransactionOptions::Option)defaultFor, value.castTo<Standalone<StringRef>>());
+	} else {
+		switch (option) {
+		case FDBDatabaseOptions::LOCATION_CACHE_SIZE:
+			locationCacheSize = (int)extractIntOption(value, 0, std::numeric_limits<int>::max());
+			break;
+		case FDBDatabaseOptions::MACHINE_ID:
+			clientLocality =
+			    LocalityData(clientLocality.processId(),
+			                 value.present() ? Standalone<StringRef>(value.get()) : Optional<Standalone<StringRef>>(),
+			                 clientLocality.machineId(),
+			                 clientLocality.dcId());
+			if (clientInfo->get().commitProxies.size())
+				commitProxies = makeReference<CommitProxyInfo>(clientInfo->get().commitProxies);
+			if (clientInfo->get().grvProxies.size())
+				grvProxies = makeReference<GrvProxyInfo>(clientInfo->get().grvProxies, BalanceOnRequests::True);
+			server_interf.clear();
+			locationCache.insert(allKeys, Reference<LocationInfo>());
+			break;
+		case FDBDatabaseOptions::MAX_WATCHES:
+			maxOutstandingWatches = (int)extractIntOption(value, 0, CLIENT_KNOBS->ABSOLUTE_MAX_WATCHES);
+			break;
+		case FDBDatabaseOptions::DATACENTER_ID:
+			clientLocality =
+			    LocalityData(clientLocality.processId(),
+			                 clientLocality.zoneId(),
+			                 clientLocality.machineId(),
+			                 value.present() ? Standalone<StringRef>(value.get()) : Optional<Standalone<StringRef>>());
+			if (clientInfo->get().commitProxies.size())
+				commitProxies = makeReference<CommitProxyInfo>(clientInfo->get().commitProxies);
+			if (clientInfo->get().grvProxies.size())
+				grvProxies = makeReference<GrvProxyInfo>(clientInfo->get().grvProxies, BalanceOnRequests::True);
+			server_interf.clear();
+			locationCache.insert(allKeys, Reference<LocationInfo>());
+			break;
+		case FDBDatabaseOptions::SNAPSHOT_RYW_ENABLE:
+			validateOptionValueNotPresent(value);
+			snapshotRywEnabled++;
+			break;
+		case FDBDatabaseOptions::SNAPSHOT_RYW_DISABLE:
+			validateOptionValueNotPresent(value);
+			snapshotRywEnabled--;
+			break;
+		case FDBDatabaseOptions::USE_CONFIG_DATABASE:
+			validateOptionValueNotPresent(value);
+			useConfigDatabase = true;
+			break;
+		case FDBDatabaseOptions::TEST_CAUSAL_READ_RISKY:
+			verifyCausalReadsProp = double(extractIntOption(value, 0, 100)) / 100.0;
+			break;
+		default:
+			break;
+		}
+	}
+}
+
+void DatabaseContext::increaseWatchCounter() {
+	if (outstandingWatches >= maxOutstandingWatches)
+		throw too_many_watches();
+
+	++outstandingWatches;
+}
+
+void DatabaseContext::decreaseWatchCounter() {
+	--outstandingWatches;
+	ASSERT(outstandingWatches >= 0);
+}
+
+Future<Void> DatabaseContext::onConnected() const {
+	return connected;
+}
+
+ACTOR static Future<Void> switchConnectionRecordImpl(Reference<IClusterConnectionRecord> connRecord,
+                                                     DatabaseContext* self) {
+	CODE_PROBE(true, "Switch connection file");
+	TraceEvent("SwitchConnectionRecord")
+	    .detail("ClusterFile", connRecord->toString())
+	    .detail("ConnectionString", connRecord->getConnectionString().toString());
+
+	// Reset state from former cluster.
+	self->commitProxies.clear();
+	self->grvProxies.clear();
+	self->minAcceptableReadVersion = std::numeric_limits<Version>::max();
+	self->invalidateCache({}, allKeys);
+
+	self->ssVersionVectorCache.clear();
+
+	auto clearedClientInfo = self->clientInfo->get();
+	clearedClientInfo.commitProxies.clear();
+	clearedClientInfo.grvProxies.clear();
+	clearedClientInfo.id = deterministicRandom()->randomUniqueID();
+	self->clientInfo->set(clearedClientInfo);
+	self->connectionRecord->set(connRecord);
+
+	state Database db(Reference<DatabaseContext>::addRef(self));
+	state Transaction tr(db);
+	loop {
+		tr.setOption(FDBTransactionOptions::READ_LOCK_AWARE);
+		try {
+			TraceEvent("SwitchConnectionRecordAttemptingGRV").log();
+			Version v = wait(tr.getReadVersion());
+			TraceEvent("SwitchConnectionRecordGotRV")
+			    .detail("ReadVersion", v)
+			    .detail("MinAcceptableReadVersion", self->minAcceptableReadVersion);
+			ASSERT(self->minAcceptableReadVersion != std::numeric_limits<Version>::max());
+			self->connectionFileChangedTrigger.trigger();
+			return Void();
+		} catch (Error& e) {
+			TraceEvent("SwitchConnectionRecordError").detail("Error", e.what());
+			wait(tr.onError(e));
+		}
+	}
+}
+
+Reference<IClusterConnectionRecord> DatabaseContext::getConnectionRecord() {
+	if (connectionRecord) {
+		return connectionRecord->get();
+	}
+	return Reference<IClusterConnectionRecord>();
+}
+
+Future<Void> DatabaseContext::switchConnectionRecord(Reference<IClusterConnectionRecord> standby) {
+	ASSERT(switchable);
+	return switchConnectionRecordImpl(standby, this);
+}
+
+Future<Void> DatabaseContext::connectionFileChanged() {
+	return connectionFileChangedTrigger.onTrigger();
+}
+
+void DatabaseContext::expireThrottles() {
+	for (auto& priorityItr : throttledTags) {
+		for (auto tagItr = priorityItr.second.begin(); tagItr != priorityItr.second.end();) {
+			if (tagItr->second.expired()) {
+				CODE_PROBE(true, "Expiring client throttle");
+				tagItr = priorityItr.second.erase(tagItr);
+			} else {
+				++tagItr;
+			}
+		}
+	}
+}
+
+Reference<DatabaseContext::TransactionT> DatabaseContext::createTransaction() {
+	return makeReference<ReadYourWritesTransaction>(Database(Reference<DatabaseContext>::addRef(this)));
+}
