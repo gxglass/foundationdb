@@ -18,6 +18,7 @@
  * limitations under the License.
  */
 
+#include <cmath>
 #include <utility>
 
 #include "fdbclient/FDBTypes.h"
@@ -29,7 +30,9 @@
 #include "fdbserver/Knobs.h"
 #include "fdbserver/MasterInterface.h"
 #include "fdbserver/WaitFailure.h"
+#include "flow/Error.h"
 #include "flow/ProtocolVersion.h"
+#include "flow/Trace.h"
 
 #include "flow/actorcompiler.h" // This must be the last #include.
 
@@ -959,6 +962,66 @@ ACTOR Future<Standalone<CommitTransactionRef>> provisionalMaster(Reference<Clust
 	}
 }
 
+// Monitors the initialization of transaction system roles (commit proxies, GRV proxies, resolvers, TLogs, LogRouters)
+// during cluster recovery and enforces a timeout if they take too long to initialize.
+//
+// The timeout uses exponential backoff based on the number of previous failed recovery attempts:
+// - By default: base timeout (30s) doubles with each unfinished recovery: 30s, 60s, 120s, 240s, up to max (300s)
+// - This prevents rapid recovery retry loops while allowing quick initial attempts
+// - All timeout values are configurable via SERVER_KNOBS
+ACTOR Future<Void> monitorInitializingTxnSystem(int unfinishedRecoveries) {
+	// Validate parameters to prevent overflow and ensure exponential backoff works correctly
+	// With growth factor <= 10 and unfinishedRecoveries <= 100, max scaling factor is 10^100
+	const bool validParameters = unfinishedRecoveries >= 1 && SERVER_KNOBS->CC_RECOVERY_INIT_REQ_TIMEOUT > 0 &&
+	                             SERVER_KNOBS->CC_RECOVERY_INIT_REQ_MAX_TIMEOUT > 0 &&
+	                             SERVER_KNOBS->CC_RECOVERY_INIT_REQ_GROWTH_FACTOR > 1.0 &&
+	                             SERVER_KNOBS->CC_RECOVERY_INIT_REQ_GROWTH_FACTOR <= 10.0;
+
+	if (!validParameters) {
+		TraceEvent(SevWarnAlways, "InitializingTxnSystemTimeoutInvalid")
+		    .detail("BaseTimeout", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_TIMEOUT)
+		    .detail("GrowthFactor", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_GROWTH_FACTOR)
+		    .detail("MaxTimeout", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_MAX_TIMEOUT)
+		    .detail("UnfinishedRecoveries", unfinishedRecoveries)
+		    .detail("MaxUnfinishedRecoveries", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_MAX_UNFINISHED_RECOVERIES);
+		ASSERT_WE_THINK(false); // it is expected for these parameters to always be valid so we assert/crash in
+		                        // simulation if that's not the case
+		return Never();
+	}
+
+	const bool tooManyUnfinishedRecoveries =
+	    unfinishedRecoveries >= SERVER_KNOBS->CC_RECOVERY_INIT_REQ_MAX_UNFINISHED_RECOVERIES;
+	if (tooManyUnfinishedRecoveries) {
+		TraceEvent(SevWarnAlways, "InitializingTxnSystemTimeoutTooMany")
+		    .detail("BaseTimeout", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_TIMEOUT)
+		    .detail("GrowthFactor", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_GROWTH_FACTOR)
+		    .detail("MaxTimeout", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_MAX_TIMEOUT)
+		    .detail("UnfinishedRecoveries", unfinishedRecoveries)
+		    .detail("MaxUnfinishedRecoveries", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_MAX_UNFINISHED_RECOVERIES);
+		return Never(); // if there have been too many recoveries, clearly something is wrong. At this point, an
+		                // operator needs to look into the issue rather than us relying on this timeout monitor.
+		                // Triggering more timeouts can make the situation worse.
+	}
+
+	// Calculate timeout with exponential backoff
+	const double scalingFactor = std::pow(SERVER_KNOBS->CC_RECOVERY_INIT_REQ_GROWTH_FACTOR, unfinishedRecoveries);
+	const double scaledTimeout = std::min(SERVER_KNOBS->CC_RECOVERY_INIT_REQ_TIMEOUT * scalingFactor,
+	                                      SERVER_KNOBS->CC_RECOVERY_INIT_REQ_MAX_TIMEOUT);
+
+	TraceEvent("InitializingTxnSystemTimeout")
+	    .detail("BaseTimeout", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_TIMEOUT)
+	    .detail("GrowthFactor", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_GROWTH_FACTOR)
+	    .detail("MaxTimeout", SERVER_KNOBS->CC_RECOVERY_INIT_REQ_MAX_TIMEOUT)
+	    .detail("UnfinishedRecoveries", unfinishedRecoveries)
+	    .detail("ScalingFactor", scalingFactor)
+	    .detail("ScaledTimeout", scaledTimeout);
+
+	wait(delay(scaledTimeout));
+
+	TraceEvent("InitializingTxnSystemTimeoutTriggered");
+	throw cluster_recovery_failed();
+}
+
 ACTOR Future<std::vector<Standalone<CommitTransactionRef>>> recruitEverything(
     Reference<ClusterRecoveryData> self,
     std::vector<StorageServerInterface>* seedServers,
@@ -1057,13 +1120,19 @@ ACTOR Future<std::vector<Standalone<CommitTransactionRef>>> recruitEverything(
 	    .detail("RemoteDcIds", remoteDcIds)
 	    .trackLatest(self->clusterRecoveryStateEventHolder->trackingKey);
 
-	// Actually, newSeedServers does both the recruiting and initialization of the seed servers; so if this is a brand
-	// new database we are sort of lying that we are past the recruitment phase.  In a perfect world we would split that
-	// up so that the recruitment part happens above (in parallel with recruiting the transaction servers?).
+	// Actually, newSeedServers does both the recruiting and initialization of the seed servers; so if this is a
+	// brand new database we are sort of lying that we are past the recruitment phase.  In a perfect world we would
+	// split that up so that the recruitment part happens above (in parallel with recruiting the transaction
+	// servers?).
 	wait(newSeedServers(self, recruits, seedServers));
+
 	state std::vector<Standalone<CommitTransactionRef>> confChanges;
-	wait(newCommitProxies(self, recruits) && newGrvProxies(self, recruits) && newResolvers(self, recruits) &&
-	     newTLogServers(self, recruits, oldLogSystem, &confChanges));
+	Future<Void> txnSystemInitialized =
+	    traceAfter(newCommitProxies(self, recruits), "CommitProxiesInitialized") &&
+	    traceAfter(newGrvProxies(self, recruits), "GRVProxiesInitialized") &&
+	    traceAfter(newResolvers(self, recruits), "ResolversInitialized") &&
+	    traceAfter(newTLogServers(self, recruits, oldLogSystem, &confChanges), "TLogServersInitialized");
+	wait(txnSystemInitialized || monitorInitializingTxnSystem(self->controllerData->db.unfinishedRecoveries));
 
 	// Update recovery related information to the newly elected sequencer (master) process.
 	wait(brokenPromiseToNever(
@@ -1649,6 +1718,7 @@ ACTOR Future<Void> clusterRecoveryCore(Reference<ClusterRecoveryData> self) {
 	    .detail("Status", RecoveryStatus::names[RecoveryStatus::recovery_transaction])
 	    .detail("PrimaryLocality", self->primaryLocality)
 	    .detail("DcId", self->masterInterface.locality.dcId())
+	    .detail("LastEpochEnd", self->lastEpochEnd)
 	    .trackLatest(self->clusterRecoveryStateEventHolder->trackingKey);
 
 	// Recovery transaction
@@ -1747,8 +1817,8 @@ ACTOR Future<Void> clusterRecoveryCore(Reference<ClusterRecoveryData> self) {
 	tr.read_snapshot = self->recoveryTransactionVersion; // lastEpochEnd would make more sense, but isn't in the initial
 	                                                     // window of the resolver(s)
 
-	TraceEvent(getRecoveryEventName(ClusterRecoveryEventType::CLUSTER_RECOVERY_COMMIT_EVENT_NAME).c_str(), self->dbgid)
-	    .log();
+	TraceEvent(getRecoveryEventName(ClusterRecoveryEventType::CLUSTER_RECOVERY_COMMIT_EVENT_NAME).c_str(), self->dbgid);
+
 	state Future<ErrorOr<CommitID>> recoveryCommit = self->commitProxies[0].commit.tryGetReply(recoveryCommitRequest);
 	self->addActor.send(self->logSystem->onError());
 	self->addActor.send(waitResolverFailure(self->resolvers));
@@ -1757,13 +1827,17 @@ ACTOR Future<Void> clusterRecoveryCore(Reference<ClusterRecoveryData> self) {
 	self->addActor.send(reportErrors(updateRegistration(self, self->logSystem), "UpdateRegistration", self->dbgid));
 	self->registrationTrigger.trigger();
 
-	wait(discardCommit(self->txnStateStore, self->txnStateLogAdapter));
+	wait(traceAfter(discardCommit(self->txnStateStore, self->txnStateLogAdapter), "DiscardCommitFinished"));
 
 	// Wait for the recovery transaction to complete.
 	// SOMEDAY: For faster recovery, do this and setDBState asynchronously and don't wait for them
 	// unless we want to change TLogs
-	wait((success(recoveryCommit) && sendInitialCommitToResolvers(self)));
+	wait(traceAfter(success(recoveryCommit), "RecoveryCommitFinished") &&
+	     traceAfter(sendInitialCommitToResolvers(self), "InitialCommitToResolversFinished"));
 	if (recoveryCommit.isReady() && recoveryCommit.get().isError()) {
+		TraceEvent(getRecoveryEventName(ClusterRecoveryEventType::CLUSTER_RECOVERY_COMMIT_EVENT_NAME).c_str(),
+		           self->dbgid)
+		    .errorUnsuppressed(recoveryCommit.get().getError());
 		CODE_PROBE(true, "Cluster recovery failed because of the initial commit failed");
 		throw cluster_recovery_failed();
 	}

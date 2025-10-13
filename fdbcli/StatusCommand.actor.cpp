@@ -202,6 +202,17 @@ std::string logBackupDR(const char* context, std::map<std::string, std::string> 
 
 namespace fdb_cli {
 
+std::string toBytesString(double bytes) {
+	if (bytes >= 1e12) {
+		return format("%.3f TB", (bytes / 1e12));
+	} else if (bytes >= 1e9) {
+		return format("%.3f GB", (bytes / 1e9));
+	} else {
+		// no decimal points for MB
+		return format("%d MB", (int)round(bytes / 1e6));
+	}
+}
+
 void printStatus(StatusObjectReader statusObj,
                  StatusClient::StatusLevel level,
                  bool displayDatabaseAvailable,
@@ -788,16 +799,16 @@ void printStatus(StatusObjectReader statusObj,
 
 				if (statusObjData.has("total_kv_size_bytes")) {
 					double totalDBBytes = statusObjData.last().get_int64();
+					outputString += toBytesString(totalDBBytes);
+				} else {
+					outputString += "unknown";
+				}
 
-					if (totalDBBytes >= 1e12)
-						outputString += format("%.3f TB", (totalDBBytes / 1e12));
+				outputString += "\n  System keyspace sizes  - ";
 
-					else if (totalDBBytes >= 1e9)
-						outputString += format("%.3f GB", (totalDBBytes / 1e9));
-
-					else
-						// no decimal points for MB
-						outputString += format("%d MB", (int)round(totalDBBytes / 1e6));
+				if (statusObjData.has("system_kv_size_bytes")) {
+					double systemBytes = statusObjData.last().get_int64();
+					outputString += toBytesString(systemBytes);
 				} else {
 					outputString += "unknown";
 				}
@@ -806,16 +817,7 @@ void printStatus(StatusObjectReader statusObj,
 
 				if (statusObjData.has("total_disk_used_bytes")) {
 					double totalDiskUsed = statusObjData.last().get_int64();
-
-					if (totalDiskUsed >= 1e12)
-						outputString += format("%.3f TB", (totalDiskUsed / 1e12));
-
-					else if (totalDiskUsed >= 1e9)
-						outputString += format("%.3f GB", (totalDiskUsed / 1e9));
-
-					else
-						// no decimal points for MB
-						outputString += format("%d MB", (int)round(totalDiskUsed / 1e6));
+					outputString += toBytesString(totalDiskUsed);
 				} else
 					outputString += "unknown";
 
