@@ -1230,11 +1230,15 @@ Future<Void> checkConsistencyScanAfterTest(Database cx, TesterConsistencyScanSta
 
 	if (csState->enableAfter || csState->waitForComplete) {
 		printf("Enabling consistency scan after test ...\n");
+		TraceEvent("TestProgress").log("checkConsistencyScanAfterTest: calling enableConsistencyScanInSim()");
 		co_await enableConsistencyScanInSim(cx);
 		printf("Enabled consistency scan after test.\n");
+		TraceEvent("TestProgress").log("checkConsistencyScanAfterTest: enableConsistencyScanInSim() returned.");
 	}
 
+	TraceEvent("TestProgress").log("checkConsistencyScanAfterTest: calling disableConsistencyScanInSim()");
 	co_await disableConsistencyScanInSim(cx, csState->waitForComplete);
+	TraceEvent("TestProgress").log("checkConsistencyScanAfterTest: disableConsistencyScanInSim() returned.");
 
 	co_return;
 }
@@ -1246,6 +1250,7 @@ Future<DistributedTestResults> runWorkload(Database const& cx,
 	Database cxCopy = cx;
 	std::vector<TesterInterface> testersCopy = testers;
 	TestSpec specCopy = spec;
+	std::string name = printable(specCopy.title);
 
 	TraceEvent("TestRunning")
 	    .detail("WorkloadTitle", specCopy.title)
@@ -1290,6 +1295,7 @@ Future<DistributedTestResults> runWorkload(Database const& cx,
 		co_await waitForAll(setups);
 		throwIfError(setups, "SetupFailedForWorkload" + printable(specCopy.title));
 		TraceEvent("TestSetupComplete").detail("WorkloadTitle", specCopy.title);
+		TraceEvent("TestProgress").log("runWorkload: workload [%s] setup finished", name.c_str());
 	}
 
 	if (specCopy.phases & TestWorkload::EXECUTION) {
@@ -1303,6 +1309,7 @@ Future<DistributedTestResults> runWorkload(Database const& cx,
 		throwIfError(starts, "StartFailedForWorkload" + printable(specCopy.title));
 		printf("%s complete\n", printable(specCopy.title).c_str());
 		TraceEvent("TestComplete").detail("WorkloadTitle", specCopy.title);
+		TraceEvent("TestProgress").log("runWorkload: workload [%s] start finished", name.c_str());
 	}
 
 	if (specCopy.phases & TestWorkload::CHECK) {
@@ -1313,7 +1320,8 @@ Future<DistributedTestResults> runWorkload(Database const& cx,
 		std::vector<Future<ErrorOr<CheckReply>>> checks;
 		TraceEvent("TestCheckingResults").detail("WorkloadTitle", specCopy.title);
 
-		printf("checking test (%s)...\n", printable(specCopy.title).c_str());
+		printf("checking test (%s)...\n", name.c_str());
+		TraceEvent("TestProgress").log("runWorkload: calling check interface for test [%s]", name.c_str());
 
 		checks.reserve(workloads.size());
 		for (int i = 0; i < workloads.size(); i++)
@@ -1329,12 +1337,15 @@ Future<DistributedTestResults> runWorkload(Database const& cx,
 				failure++;
 		}
 		TraceEvent("TestCheckComplete").detail("WorkloadTitle", specCopy.title);
+		TraceEvent("TestProgress")
+		    .log("finished check() for test [%s]; success [%d], failure [%d]", name.c_str(), success, failure);
 	}
 
 	if (specCopy.phases & TestWorkload::METRICS) {
 		std::vector<Future<ErrorOr<std::vector<PerfMetric>>>> metricTasks;
 		printf("fetching metrics (%s)...\n", printable(specCopy.title).c_str());
 		TraceEvent("TestFetchingMetrics").detail("WorkloadTitle", specCopy.title);
+		TraceEvent("TestProgress").log("runWorkload: calling metrics interface for test [%s]", name.c_str());
 		metricTasks.reserve(workloads.size());
 		for (int i = 0; i < workloads.size(); i++)
 			metricTasks.push_back(
@@ -2093,6 +2104,7 @@ Future<bool> runTest(Database cx,
 	double savedDisableDuration = 0;
 	bool hadException = false;
 	Error caughtError;
+	std::string name = spec.title.toString();
 
 	try {
 		Future<DistributedTestResults> fTestResults = runWorkload(cx, testers, spec);
@@ -2105,6 +2117,7 @@ Future<bool> runTest(Database cx,
 		}
 		DistributedTestResults _testResults = co_await fTestResults;
 		printf("Test complete\n");
+		TraceEvent("TestProgress").log("runTest: test [%s] complete", name.c_str());
 		testResults = _testResults;
 		logMetrics(testResults.metrics);
 		if (g_network->isSimulated() && savedDisableDuration > 0) {
@@ -2118,7 +2131,7 @@ Future<bool> runTest(Database cx,
 			    .error(e)
 			    .detail("Reason", "Test timed out")
 			    .detail("Timeout", spec.timeout);
-			fprintf(stderr, "ERROR: Test timed out after %d seconds.\n", spec.timeout);
+			fprintf(stderr, "ERROR: Test [%s] timed out after %d seconds.\n", name.c_str(), spec.timeout);
 			testResults.failures = testers.size();
 			testResults.successes = 0;
 		} else {
@@ -2135,6 +2148,10 @@ Future<bool> runTest(Database cx,
 
 	if (spec.useDB) {
 		printf("%d test clients passed; %d test clients failed\n", testResults.successes, testResults.failures);
+		TraceEvent("TestProgress")
+		    .log("runTest: [%d] test clients passed; [%d] test clients failed",
+		         testResults.successes,
+		         testResults.failures);
 		if (spec.dumpAfterTest) {
 			Error dumpErr;
 			try {
@@ -2147,19 +2164,22 @@ Future<bool> runTest(Database cx,
 			co_await delay(1.0);
 		}
 
+		TraceEvent("TestProgress").log("runTest: invoking checkConsistencyScanAfterTest()");
 		// Disable consistency scan before checkConsistency because otherwise it will prevent quiet database from
 		// quiescing
 		co_await checkConsistencyScanAfterTest(cx, consistencyScanState);
 		printf("Consistency scan done\n");
+		TraceEvent("TestProgress").log("runTest: checkConsistencyScanAfterTest returned");
 
 		// Run the consistency check workload
 		if (spec.runConsistencyCheck) {
 			bool quiescent = g_network->isSimulated() ? !BUGGIFY : spec.waitForQuiescenceEnd;
 			try {
 				printf("Running urgent consistency check...\n");
-				// For testing urgent consistency check
+				TraceEvent("TestProgress").log("Running urgent consistency check");
 				co_await timeoutError(checkConsistencyUrgentSim(cx, testers), 20000.0);
 				printf("Urgent consistency check done\nRunning consistency check...\n");
+				TraceEvent("TestProgress").log("Urgent consistency check done; now invoking checkConsistency()");
 				co_await timeoutError(checkConsistency(cx,
 				                                       testers,
 				                                       quiescent,
@@ -2170,6 +2190,7 @@ Future<bool> runTest(Database cx,
 				                                       dbInfo),
 				                      20000.0);
 				printf("Consistency check done\n");
+				TraceEvent("TestProgress").log("checkConsistency() returned");
 			} catch (Error& e) {
 				TraceEvent(SevError, "TestFailure").error(e).detail("Reason", "Unable to perform consistency check");
 				ok = false;
@@ -2179,15 +2200,25 @@ Future<bool> runTest(Database cx,
 			if (quiescent && g_network->isSimulated()) {
 				try {
 					TraceEvent("AuditStorageStart");
+					TraceEvent("TestProgress")
+					    .log("runTest: calling auditStorageCorrectness(dbinfo, ValidateHA, 1500.0)");
 					co_await timeoutError(auditStorageCorrectness(dbInfo, AuditType::ValidateHA), 1500.0);
 					TraceEvent("AuditStorageCorrectnessHADone");
+					TraceEvent("TestProgress")
+					    .log("runTest: calling auditStorageCorrectness(dbinfo, ValidateReplica, 1500.0)");
 					co_await timeoutError(auditStorageCorrectness(dbInfo, AuditType::ValidateReplica), 1500.0);
 					TraceEvent("AuditStorageCorrectnessReplicaDone");
+					TraceEvent("TestProgress")
+					    .log("runTest: calling auditStorageCorrectness(dbinfo, ValidateLocationMetadata, 1500.0)");
 					co_await timeoutError(auditStorageCorrectness(dbInfo, AuditType::ValidateLocationMetadata), 1500.0);
+
 					TraceEvent("AuditStorageCorrectnessLocationMetadataDone");
+					TraceEvent("TestProgress")
+					    .log("runTest: calling auditStorageCorrectness(dbinfo, ValidateSTorageServerShard, 1500.0)");
 					co_await timeoutError(auditStorageCorrectness(dbInfo, AuditType::ValidateStorageServerShard),
 					                      1500.0);
 					TraceEvent("AuditStorageCorrectnessStorageServerShardDone");
+					TraceEvent("TestProgress").log("runTest: storage audits completed.");
 				} catch (Error& e) {
 					ok = false;
 					TraceEvent(SevError, "TestFailure")
@@ -2199,7 +2230,8 @@ Future<bool> runTest(Database cx,
 	}
 
 	TraceEvent(ok ? SevInfo : SevWarnAlways, "TestResults").detail("Workload", spec.title).detail("Passed", (int)ok);
-	//.detail("Metrics", metricSummary);
+	TraceEvent("TestProgress")
+	    .log("runTest: Workload [%s] passed: [%s]", spec.title.toString().c_str(), (ok ? "TRUE" : "FALSE"));
 
 	if (ok) {
 		passCount++;
@@ -2208,11 +2240,15 @@ Future<bool> runTest(Database cx,
 	}
 
 	printf("%d test clients passed; %d test clients failed\n", testResults.successes, testResults.failures);
+	TraceEvent("TestProgress")
+	    .log(
+	        "runTest: [%d] test clients passed; [%d] test clients failed", testResults.successes, testResults.failures);
 
 	if (spec.useDB && spec.clearAfterTest) {
 		Error clearErr;
 		try {
 			TraceEvent("TesterClearingDatabase").log();
+			TraceEvent("TestProgress").log("runTest: cleaning database via clearData(cx, 1000.0)");
 			co_await timeoutError(clearData(cx), 1000.0);
 		} catch (Error& e) {
 			TraceEvent(SevError, "ErrorClearingDatabaseAfterTest").error(e);
@@ -2734,30 +2770,24 @@ Future<Void> disableConnectionFailuresAfter(double seconds, std::string context)
 }
 
 /**
- * \brief Test orchestrator: sends test specification to testers in the right order and collects the results.
+ * Test orchestrator: sends test specification to testers in the right order and collects the results.
  *
  * There are multiple actors in this file with similar names (runTest, runTests) and slightly different signatures.
  *
  * This is the actual orchestrator. It reads the test specifications (from tests), prepares the cluster (by running the
  * configure command given in startingConfiguration) and then runs the workload.
  *
- * \param cc The cluster controller interface
- * \param ci Same as cc.clientInterface
- * \param testers The interfaces of the testers that should run the actual workloads
- * \param tests The test specifications to run
- * \param startingConfiguration If non-empty, the orchestrator will attempt to set this configuration before starting
- * the tests.
- * \param locality client locality (it seems this is unused?)
+ * NOTE: this assumes that referenced objects will outlive all suspension points encounted by this function.
  *
- * \returns A future which will be set after all tests finished.
+ * Rturns a future which will be set after all tests finished.
  */
-Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullInterface>>> cc,
-                      Reference<AsyncVar<Optional<struct ClusterInterface>>> ci,
-                      std::vector<TesterInterface> testers,
-                      std::vector<TestSpec> tests,
-                      StringRef startingConfiguration,
-                      LocalityData locality,
-                      bool restartingTest) {
+Future<Void> runTests7(Reference<AsyncVar<Optional<struct ClusterControllerFullInterface>>> cc,
+                       Reference<AsyncVar<Optional<struct ClusterInterface>>> ci,
+                       std::vector<TesterInterface> testers,
+                       std::vector<TestSpec> tests,
+                       StringRef startingConfiguration,
+                       LocalityData locality,
+                       bool restartingTest) {
 	Database cx;
 	Reference<AsyncVar<ServerDBInfo>> dbInfo(new AsyncVar<ServerDBInfo>);
 	Future<Void> ccMonitor = monitorServerDBInfo(cc, LocalityData(), dbInfo); // FIXME: locality
@@ -2777,23 +2807,32 @@ Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullIn
 
 	// Gives chance for g_network->run() to run inside event loop and hence let
 	// the tests see correct value for `isOnMainThread()`.
+	// FIXME: this type of knowledge of random implementation details elsewhere is obviously
+	// undesirable and getting rid of hacks like this to simplify things, reduce cognitive load,
+	// etc would be nice.
 	co_await yield();
 
-	if (tests.empty())
+	if (tests.empty()) {
 		useDB = true;
+	}
 	for (auto iter = tests.begin(); iter != tests.end(); ++iter) {
-		if (iter->useDB)
+		if (iter->useDB) {
 			useDB = true;
-		if (iter->waitForQuiescenceBegin)
+		}
+		if (iter->waitForQuiescenceBegin) {
 			waitForQuiescenceBegin = true;
-		if (iter->waitForQuiescenceEnd)
+		}
+		if (iter->waitForQuiescenceEnd) {
 			waitForQuiescenceEnd = true;
-		if (iter->restorePerpetualWiggleSetting)
+		}
+		if (iter->restorePerpetualWiggleSetting) {
 			restorePerpetualWiggleSetting = true;
+		}
 		startDelay = std::max(startDelay, iter->startDelay);
 		databasePingDelay = std::min(databasePingDelay, iter->databasePingDelay);
-		if (iter->simBackupAgents != ISimulator::BackupAgentType::NoBackupAgents)
+		if (iter->simBackupAgents != ISimulator::BackupAgentType::NoBackupAgents) {
 			simBackupAgents = iter->simBackupAgents;
+		}
 
 		if (iter->simDrAgents != ISimulator::BackupAgentType::NoBackupAgents) {
 			simDrAgents = iter->simDrAgents;
@@ -2807,8 +2846,9 @@ Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullIn
 	}
 
 	// turn off the database ping functionality if the suite of tests are not going to be using the database
-	if (!useDB)
+	if (!useDB) {
 		databasePingDelay = 0.0;
+	}
 
 	if (useDB) {
 		cx = openDBOnServer(dbInfo);
@@ -2824,6 +2864,14 @@ Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullIn
 	// Change the configuration (and/or create the database) if necessary
 	printf("startingConfiguration:%s start\n", startingConfiguration.toString().c_str());
 	fmt::print("useDB: {}\n", useDB);
+
+	TraceEvent("TestProgress")
+	    .log("runTests7: startingConfiguration: [%s]; useDB: [%s]",
+	         startingConfiguration.toString().c_str(),
+	         (useDB ? "TRUE" : "FALSE"));
+
+	// If this is important it should be in the trace file also.  Who wants to read two places
+	// when we could be reading just one?
 	printSimulatedTopology();
 	if (useDB && startingConfiguration != StringRef()) {
 		Error configErr;
@@ -2915,7 +2963,10 @@ Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullIn
 		}
 	}
 
-	if (useDB && waitForQuiescenceBegin) {
+	bool runPretestChecks = (useDB && waitForQuiescenceBegin);
+	TraceEvent("TestProgress").log("runTests7: doing PreTestChecks? [%s]", (runPretestChecks ? "TRUE" : "FALSE"));
+
+	if (runPretestChecks) {
 		TraceEvent("TesterStartingPreTestChecks")
 		    .detail("DatabasePingDelay", databasePingDelay)
 		    .detail("StartDelay", startDelay);
@@ -2975,27 +3026,35 @@ Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullIn
 		repairDataCenter = reconfigure;
 	}
 
+	TraceEvent("TestProgress").log("runTests7: going to run [%d] tests", tests.size());
+	// Also emit legacy log:
 	TraceEvent("TestsExpectedToPass").detail("Count", tests.size());
+
 	int idx = 0;
 	std::unique_ptr<KnobProtectiveGroup> knobProtectiveGroup;
 	for (; idx < tests.size(); idx++) {
 		printf("Run test:%s start\n", tests[idx].title.toString().c_str());
+		TraceEvent("TestProgress").log("runTests7: starting test [%s]", tests[idx].title.toString().c_str());
 		knobProtectiveGroup = std::make_unique<KnobProtectiveGroup>(tests[idx].overrideKnobs);
 		co_await success(runTest(cx, testers, tests[idx], dbInfo, &consistencyScanState));
 		knobProtectiveGroup.reset(nullptr);
 		printf("Run test:%s Done.\n", tests[idx].title.toString().c_str());
-		// do we handle a failure here?
+		TraceEvent("TestProgress").log("runTests7: done running test [%s]", tests[idx].title.toString().c_str());
 	}
 
 	printf("\n%d tests passed; %d tests failed.\n", passCount, failCount);
+	TraceEvent("TestProgress").log("runTests7: [%d] tests passed; [%d] tests failed.", passCount, failCount);
 
-	// If the database was deleted during the workload we need to recreate the database
-	if (tests.empty() || useDB) {
+	bool ranConsistencyScan = false;
+	if (useDB) {
 		if (waitForQuiescenceEnd) {
+			TraceEvent("TestProgress")
+			    .log("runTests7: useDB && waitForQuiescenceEnd ==> invoking checkConsistencyScanAfterTest()");
 			printf("Waiting for DD to end...\n");
 			TraceEvent("QuietDatabaseEndStart");
 			try {
 				TraceEvent("QuietDatabaseEndWait");
+				ranConsistencyScan = true;
 				Future<Void> waitConsistencyScanEnd = checkConsistencyScanAfterTest(cx, &consistencyScanState);
 				Future<Void> waitQuietDatabaseEnd =
 				    quietDatabase(cx, dbInfo, "End", 0, 2e6, 2e6) ||
@@ -3009,6 +3068,12 @@ Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullIn
 			}
 		}
 	}
+	if (ranConsistencyScan) {
+		TraceEvent("TestProgress").log("runTests7: finished running consistency scan");
+	} else {
+		TraceEvent("TestProgress").log("runTests7: didn't run consistency scan");
+	}
+
 	printf("\n");
 
 	co_return;
@@ -3032,14 +3097,14 @@ Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullIn
  *
  * \returns A future which will be set after all tests finished.
  */
-Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullInterface>>> cc,
-                      Reference<AsyncVar<Optional<struct ClusterInterface>>> ci,
-                      std::vector<TestSpec> tests,
-                      test_location_t at,
-                      int minTestersExpected,
-                      StringRef startingConfiguration,
-                      LocalityData locality,
-                      bool restartingTest) {
+Future<Void> runTests8(Reference<AsyncVar<Optional<struct ClusterControllerFullInterface>>> cc,
+                       Reference<AsyncVar<Optional<struct ClusterInterface>>> ci,
+                       std::vector<TestSpec> tests,
+                       test_location_t at,
+                       int minTestersExpected,
+                       StringRef startingConfiguration,
+                       LocalityData locality,
+                       bool restartingTest) {
 	int flags = (at == TEST_ON_SERVERS ? 0 : GetWorkersRequest::TESTER_CLASS_ONLY) |
 	            GetWorkersRequest::NON_EXCLUDED_PROCESSES_ONLY;
 	Future<Void> testerTimeout = delay(600.0); // wait 600 sec for testers to show up
@@ -3082,7 +3147,7 @@ Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullIn
 	for (int i = 0; i < workers.size(); i++)
 		ts.push_back(workers[i].interf.testerInterface);
 
-	co_await runTests(cc, ci, ts, tests, startingConfiguration, locality, restartingTest);
+	co_await runTests7(cc, ci, ts, tests, startingConfiguration, locality, restartingTest);
 	co_return;
 }
 
@@ -3112,41 +3177,44 @@ Future<Void> runTests(Reference<AsyncVar<Optional<struct ClusterControllerFullIn
  *
  * \returns A future which will be set after all tests finished.
  */
-Future<Void> runTests(Reference<IClusterConnectionRecord> const& connRecord,
-                      test_type_t const& whatToRun,
-                      test_location_t const& at,
-                      int const& minTestersExpected,
-                      std::string const& fileName,
-                      StringRef const& startingConfiguration,
-                      LocalityData const& locality,
-                      UnitTestParameters const& testOptions,
-                      bool const& restartingTest) {
+Future<Void> runTests(Reference<IClusterConnectionRecord> const& connRecordUnsafe,
+                      test_type_t const& whatToRunUnsafe,
+                      test_location_t const& atUnsafe,
+                      int const& minTestersExpectedUnsafe,
+                      std::string const& fileNameUnsafe,
+                      StringRef const& startingConfigurationUnsafe,
+                      LocalityData const& localityUnsafe,
+                      UnitTestParameters const& testOptionsUnsafe,
+                      bool const& restartingTestUnsafe) {
 	// C++20 coroutine safety: copy parameters that might bind to temporaries (default args).
 	// const& parameters only store the reference in the coroutine frame; temporaries are
 	// destroyed after the first suspend point, leaving dangling references.
-	Reference<IClusterConnectionRecord> connRecordCopy = connRecord;
-	test_type_t whatToRunCopy = whatToRun;
-	test_location_t atCopy = at;
-	int minTestersExpectedCopy = minTestersExpected;
-	std::string fileNameCopy = fileName;
-	StringRef startingConfigurationCopy = startingConfiguration;
-	LocalityData localityCopy = locality;
-	UnitTestParameters testOptionsCopy = testOptions;
-	bool restartingTestCopy = restartingTest;
+	// Just do this for all parameters, including ones that could be passed by value.
+	Reference<IClusterConnectionRecord> connRecord = connRecordUnsafe;
+	test_type_t whatToRun = whatToRunUnsafe;
+	test_location_t at = atUnsafe;
+	int minTestersExpected = minTestersExpectedUnsafe;
+	std::string fileName = fileNameUnsafe;
+	StringRef startingConfiguration = startingConfigurationUnsafe;
+	LocalityData locality = localityUnsafe;
+	UnitTestParameters testOptions = testOptionsUnsafe;
+	bool restartingTest = restartingTestUnsafe;
 
 	TestSet testSet;
 	std::unique_ptr<KnobProtectiveGroup> knobProtectiveGroup(nullptr);
 	auto cc = makeReference<AsyncVar<Optional<ClusterControllerFullInterface>>>();
 	auto ci = makeReference<AsyncVar<Optional<ClusterInterface>>>();
 	std::vector<Future<Void>> actors;
-	if (connRecordCopy) {
-		actors.push_back(reportErrors(monitorLeader(connRecordCopy, cc), "MonitorLeader"));
+	if (connRecord) {
+		actors.push_back(reportErrors(monitorLeader(connRecord, cc), "MonitorLeader"));
 		actors.push_back(reportErrors(extractClusterInterface(cc, ci), "ExtractClusterInterface"));
 	}
 
-	if (whatToRunCopy == TEST_TYPE_CONSISTENCY_CHECK_URGENT) {
+	TraceEvent("TestProgress").log("runTests: invoked with whatToRun = [%d]", whatToRun);
+
+	if (whatToRun == TEST_TYPE_CONSISTENCY_CHECK_URGENT) {
 		// Need not to set spec here. Will set spec when triggering workload
-	} else if (whatToRunCopy == TEST_TYPE_CONSISTENCY_CHECK) {
+	} else if (whatToRun == TEST_TYPE_CONSISTENCY_CHECK) {
 		TestSpec spec;
 		Standalone<VectorRef<KeyValueRef>> options;
 		spec.title = "ConsistencyCheck"_sr;
@@ -3165,7 +3233,7 @@ Future<Void> runTests(Reference<IClusterConnectionRecord> const& connRecord,
 		options.push_back_deep(options.arena(), KeyValueRef("shuffleShards"_sr, "true"_sr));
 		spec.options.push_back_deep(spec.options.arena(), options);
 		testSet.testSpecs.push_back(spec);
-	} else if (whatToRunCopy == TEST_TYPE_UNIT_TESTS) {
+	} else if (whatToRun == TEST_TYPE_UNIT_TESTS) {
 		TestSpec spec;
 		Standalone<VectorRef<KeyValueRef>> options;
 		spec.title = "UnitTests"_sr;
@@ -3173,34 +3241,35 @@ Future<Void> runTests(Reference<IClusterConnectionRecord> const& connRecord,
 		spec.useDB = false;
 		spec.timeout = 0;
 		options.push_back_deep(options.arena(), KeyValueRef("testName"_sr, "UnitTests"_sr));
-		options.push_back_deep(options.arena(), KeyValueRef("testsMatching"_sr, fileNameCopy));
+		options.push_back_deep(options.arena(), KeyValueRef("testsMatching"_sr, fileName));
 		// Add unit test options as test spec options
-		for (auto& kv : testOptionsCopy.params) {
+		for (auto& kv : testOptions.params) {
 			options.push_back_deep(options.arena(), KeyValueRef(kv.first, kv.second));
 		}
 		spec.options.push_back_deep(spec.options.arena(), options);
 		testSet.testSpecs.push_back(spec);
 	} else {
+		ASSERT(whatToRun == TEST_TYPE_FROM_FILE);
 		std::ifstream ifs;
-		ifs.open(fileNameCopy.c_str(), std::ifstream::in);
+		ifs.open(fileName.c_str(), std::ifstream::in);
 		if (!ifs.good()) {
 			TraceEvent(SevError, "TestHarnessFail")
 			    .detail("Reason", "file open failed")
-			    .detail("File", fileNameCopy.c_str());
-			fprintf(stderr, "ERROR: Could not open file `%s'\n", fileNameCopy.c_str());
+			    .detail("File", fileName.c_str());
+			fprintf(stderr, "ERROR: Could not open file `%s'\n", fileName.c_str());
 			co_return;
 		}
 		enableClientInfoLogging(); // Enable Client Info logging by default for tester
-		if (fileNameCopy.ends_with(".txt")) {
+		if (fileName.ends_with(".txt")) {
 			testSet.testSpecs = readTests(ifs);
-		} else if (fileNameCopy.ends_with(".toml")) {
+		} else if (fileName.ends_with(".toml")) {
 			// TOML is weird about opening the file as binary on windows, so we
 			// just let TOML re-open the file instead of using ifs.
-			testSet = readTOMLTests(fileNameCopy);
+			testSet = readTOMLTests(fileName);
 		} else {
 			TraceEvent(SevError, "TestHarnessFail")
 			    .detail("Reason", "unknown tests specification extension")
-			    .detail("File", fileNameCopy.c_str());
+			    .detail("File", fileName.c_str());
 			co_return;
 		}
 		ifs.close();
@@ -3213,34 +3282,29 @@ Future<Void> runTests(Reference<IClusterConnectionRecord> const& connRecord,
 	Database urgentCx;
 	Reference<AsyncVar<ServerDBInfo>> urgentDbInfo;
 	Future<Void> urgentCcMonitor;
-	if (whatToRunCopy == TEST_TYPE_CONSISTENCY_CHECK_URGENT) {
+	if (whatToRun == TEST_TYPE_CONSISTENCY_CHECK_URGENT) {
 		urgentDbInfo = makeReference<AsyncVar<ServerDBInfo>>();
 		urgentCcMonitor = monitorServerDBInfo(cc, LocalityData(), urgentDbInfo); // FIXME: locality
 		urgentCx = openDBOnServer(urgentDbInfo);
 		tests = reportErrors(
 		    runConsistencyCheckerUrgentHolder(
-		        cc, urgentCx, Optional<std::vector<TesterInterface>>(), minTestersExpectedCopy, /*repeatRun=*/true),
+		        cc, urgentCx, Optional<std::vector<TesterInterface>>(), minTestersExpected, /*repeatRun=*/true),
 		    "runConsistencyCheckerUrgentHolder");
-	} else if (atCopy == TEST_HERE) {
+	} else if (at == TEST_HERE) {
 		auto db = makeReference<AsyncVar<ServerDBInfo>>();
 		std::vector<TesterInterface> iTesters(1);
 		actors.push_back(
 		    reportErrors(monitorServerDBInfo(cc, LocalityData(), db), "MonitorServerDBInfo")); // FIXME: Locality
-		actors.push_back(
-		    reportErrors(testerServerCore(iTesters[0], connRecordCopy, db, localityCopy), "TesterServerCore"));
-		tests =
-		    runTests(cc, ci, iTesters, testSet.testSpecs, startingConfigurationCopy, localityCopy, restartingTestCopy);
+		actors.push_back(reportErrors(testerServerCore(iTesters[0], connRecord, db, locality), "TesterServerCore"));
+		tests = runTests7(cc, ci, iTesters, testSet.testSpecs, startingConfiguration, locality, restartingTest);
 	} else {
-		tests = reportErrors(runTests(cc,
-		                              ci,
-		                              testSet.testSpecs,
-		                              atCopy,
-		                              minTestersExpectedCopy,
-		                              startingConfigurationCopy,
-		                              localityCopy,
-		                              restartingTestCopy),
-		                     "RunTests");
+		tests = reportErrors(
+		    runTests8(
+		        cc, ci, testSet.testSpecs, at, minTestersExpected, startingConfiguration, locality, restartingTest),
+		    "RunTests");
 	}
+
+	TraceEvent("TestProgress").log("runTests: waiting for actors to finish.");
 
 	Future<Void> actorsFuture = actors.empty() ? Never() : waitForAll(actors);
 	co_await Choose()
