@@ -1299,7 +1299,7 @@ Future<DistributedTestResults> runWorkload(Database const& cx,
 		co_await waitForAll(setups);
 		throwIfError(setups, "SetupFailedForWorkload" + printable(specCopy.title));
 		TraceEvent("TestSetupComplete").detail("WorkloadTitle", specCopy.title);
-		TraceEvent("TestProgress").detailf("runWorkload: workload [%s] setup finished", name.c_str());
+		TraceEvent("TestProgress").detailf("Detail", "runWorkload: workload [%s] setup finished", name.c_str());
 	}
 
 	if (specCopy.phases & TestWorkload::EXECUTION) {
