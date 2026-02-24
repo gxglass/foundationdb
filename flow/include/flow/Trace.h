@@ -421,6 +421,10 @@ public:
 
 	// Writes the event to the underlying log file.
 	void writeEvent();
+	// Legacy `log` method to force writing. This can be done by the destructor,
+	// but lots of legacy code (~500 calls) explicitly calls `log`, so leave this in
+	// to pacify those call sites.
+	void log(void) { writeEvent(); }
 
 	void disable() { enabled.suppress(); } // Disables the trace event so it doesn't get logged
 
