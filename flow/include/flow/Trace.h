@@ -316,6 +316,9 @@ struct SWIFT_CXX_IMPORT_OWNED BaseTraceEvent {
 		return *this;
 	}
 	BaseTraceEvent& detailf(std::string key, const char* valueFormat, ...);
+	// Logs a formatted message with a fixed key ("LogMessage") for the case
+	// where all you want to do is log a message.
+	BaseTraceEvent& log(const char* format, ...);
 
 protected:
 	class State {

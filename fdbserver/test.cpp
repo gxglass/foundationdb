@@ -1230,19 +1230,15 @@ Future<Void> checkConsistencyScanAfterTest(Database cx, TesterConsistencyScanSta
 
 	if (csState->enableAfter || csState->waitForComplete) {
 		printf("Enabling consistency scan after test ...\n");
-		TraceEvent("TestProgress")
-		    .detailf("Detail", "checkConsistencyScanAfterTest: calling enableConsistencyScanInSim()");
+		TraceEvent("TestProgress").log("checkConsistencyScanAfterTest: calling enableConsistencyScanInSim()");
 		co_await enableConsistencyScanInSim(cx);
 		printf("Enabled consistency scan after test.\n");
-		TraceEvent("TestProgress")
-		    .detailf("Detail", "checkConsistencyScanAfterTest: enableConsistencyScanInSim() returned.");
+		TraceEvent("TestProgress").log("checkConsistencyScanAfterTest: enableConsistencyScanInSim() returned.");
 	}
 
-	TraceEvent("TestProgress")
-	    .detailf("Detail", "checkConsistencyScanAfterTest: calling disableConsistencyScanInSim()");
+	TraceEvent("TestProgress").log("checkConsistencyScanAfterTest: calling disableConsistencyScanInSim()");
 	co_await disableConsistencyScanInSim(cx, csState->waitForComplete);
-	TraceEvent("TestProgress")
-	    .detailf("Detail", "checkConsistencyScanAfterTest: disableConsistencyScanInSim() returned.");
+	TraceEvent("TestProgress").log("checkConsistencyScanAfterTest: disableConsistencyScanInSim() returned.");
 
 	co_return;
 }
@@ -1299,7 +1295,7 @@ Future<DistributedTestResults> runWorkload(Database const& cx,
 		co_await waitForAll(setups);
 		throwIfError(setups, "SetupFailedForWorkload" + printable(specCopy.title));
 		TraceEvent("TestSetupComplete").detail("WorkloadTitle", specCopy.title);
-		TraceEvent("TestProgress").detailf("Detail", "runWorkload: workload [%s] setup finished", name.c_str());
+		TraceEvent("TestProgress").log("runWorkload: workload [%s] setup finished", name.c_str());
 	}
 
 	if (specCopy.phases & TestWorkload::EXECUTION) {
@@ -1313,7 +1309,7 @@ Future<DistributedTestResults> runWorkload(Database const& cx,
 		throwIfError(starts, "StartFailedForWorkload" + printable(specCopy.title));
 		printf("%s complete\n", printable(specCopy.title).c_str());
 		TraceEvent("TestComplete").detail("WorkloadTitle", specCopy.title);
-		TraceEvent("TestProgress").detailf("Detail", "runWorkload: workload [%s] start finished", name.c_str());
+		TraceEvent("TestProgress").log("runWorkload: workload [%s] start finished", name.c_str());
 	}
 
 	if (specCopy.phases & TestWorkload::CHECK) {
@@ -1325,8 +1321,7 @@ Future<DistributedTestResults> runWorkload(Database const& cx,
 		TraceEvent("TestCheckingResults").detail("WorkloadTitle", specCopy.title);
 
 		printf("checking test (%s)...\n", name.c_str());
-		TraceEvent("TestProgress")
-		    .detailf("Detail", "runWorkload: calling check interface for test [%s]", name.c_str());
+		TraceEvent("TestProgress").log("runWorkload: calling check interface for test [%s]", name.c_str());
 
 		checks.reserve(workloads.size());
 		for (int i = 0; i < workloads.size(); i++)
@@ -1343,16 +1338,14 @@ Future<DistributedTestResults> runWorkload(Database const& cx,
 		}
 		TraceEvent("TestCheckComplete").detail("WorkloadTitle", specCopy.title);
 		TraceEvent("TestProgress")
-		    .detailf(
-		        "Detail", "finished check() for test [%s]; success [%d], failure [%d]", name.c_str(), success, failure);
+		    .log("finished check() for test [%s]; success [%d], failure [%d]", name.c_str(), success, failure);
 	}
 
 	if (specCopy.phases & TestWorkload::METRICS) {
 		std::vector<Future<ErrorOr<std::vector<PerfMetric>>>> metricTasks;
 		printf("fetching metrics (%s)...\n", printable(specCopy.title).c_str());
 		TraceEvent("TestFetchingMetrics").detail("WorkloadTitle", specCopy.title);
-		TraceEvent("TestProgress")
-		    .detailf("Detail", "runWorkload: calling metrics interface for test [%s]", name.c_str());
+		TraceEvent("TestProgress").log("runWorkload: calling metrics interface for test [%s]", name.c_str());
 		metricTasks.reserve(workloads.size());
 		for (int i = 0; i < workloads.size(); i++)
 			metricTasks.push_back(
@@ -2124,7 +2117,7 @@ Future<bool> runTest(Database cx,
 		}
 		DistributedTestResults _testResults = co_await fTestResults;
 		printf("Test complete\n");
-		TraceEvent("TestProgress").detailf("Detail", "runTest: test [%s] complete", name.c_str());
+		TraceEvent("TestProgress").log("runTest: test [%s] complete", name.c_str());
 		testResults = _testResults;
 		logMetrics(testResults.metrics);
 		if (g_network->isSimulated() && savedDisableDuration > 0) {
@@ -2156,10 +2149,9 @@ Future<bool> runTest(Database cx,
 	if (spec.useDB) {
 		printf("%d test clients passed; %d test clients failed\n", testResults.successes, testResults.failures);
 		TraceEvent("TestProgress")
-		    .detailf("Detail",
-		             "runTest: [%d] test clients passed; [%d] test clients failed",
-		             testResults.successes,
-		             testResults.failures);
+		    .log("runTest: [%d] test clients passed; [%d] test clients failed",
+		         testResults.successes,
+		         testResults.failures);
 		if (spec.dumpAfterTest) {
 			Error dumpErr;
 			try {
@@ -2172,23 +2164,22 @@ Future<bool> runTest(Database cx,
 			co_await delay(1.0);
 		}
 
-		TraceEvent("TestProgress").detailf("Detail", "runTest: invoking checkConsistencyScanAfterTest()");
+		TraceEvent("TestProgress").log("runTest: invoking checkConsistencyScanAfterTest()");
 		// Disable consistency scan before checkConsistency because otherwise it will prevent quiet database from
 		// quiescing
 		co_await checkConsistencyScanAfterTest(cx, consistencyScanState);
 		printf("Consistency scan done\n");
-		TraceEvent("TestProgress").detailf("Detail", "runTest: checkConsistencyScanAfterTest returned");
+		TraceEvent("TestProgress").log("runTest: checkConsistencyScanAfterTest returned");
 
 		// Run the consistency check workload
 		if (spec.runConsistencyCheck) {
 			bool quiescent = g_network->isSimulated() ? !BUGGIFY : spec.waitForQuiescenceEnd;
 			try {
 				printf("Running urgent consistency check...\n");
-				TraceEvent("TestProgress").detailf("Detail", "Running urgent consistency check");
+				TraceEvent("TestProgress").log("Running urgent consistency check");
 				co_await timeoutError(checkConsistencyUrgentSim(cx, testers), 20000.0);
 				printf("Urgent consistency check done\nRunning consistency check...\n");
-				TraceEvent("TestProgress")
-				    .detailf("Detail", "Urgent consistency check done; now invoking checkConsistency()");
+				TraceEvent("TestProgress").log("Urgent consistency check done; now invoking checkConsistency()");
 				co_await timeoutError(checkConsistency(cx,
 				                                       testers,
 				                                       quiescent,
@@ -2199,7 +2190,7 @@ Future<bool> runTest(Database cx,
 				                                       dbInfo),
 				                      20000.0);
 				printf("Consistency check done\n");
-				TraceEvent("TestProgress").detailf("Detail", "checkConsistency() returned");
+				TraceEvent("TestProgress").log("checkConsistency() returned");
 			} catch (Error& e) {
 				TraceEvent(SevError, "TestFailure").error(e).detail("Reason", "Unable to perform consistency check");
 				ok = false;
@@ -2210,27 +2201,24 @@ Future<bool> runTest(Database cx,
 				try {
 					TraceEvent("AuditStorageStart");
 					TraceEvent("TestProgress")
-					    .detailf("Detail", "runTest: calling auditStorageCorrectness(dbinfo, ValidateHA, 1500.0)");
+					    .log("runTest: calling auditStorageCorrectness(dbinfo, ValidateHA, 1500.0)");
 					co_await timeoutError(auditStorageCorrectness(dbInfo, AuditType::ValidateHA), 1500.0);
 					TraceEvent("AuditStorageCorrectnessHADone");
 					TraceEvent("TestProgress")
-					    .detailf("Detail", "runTest: calling auditStorageCorrectness(dbinfo, ValidateReplica, 1500.0)");
+					    .log("runTest: calling auditStorageCorrectness(dbinfo, ValidateReplica, 1500.0)");
 					co_await timeoutError(auditStorageCorrectness(dbInfo, AuditType::ValidateReplica), 1500.0);
 					TraceEvent("AuditStorageCorrectnessReplicaDone");
 					TraceEvent("TestProgress")
-					    .detailf("Detail",
-					             "runTest: calling auditStorageCorrectness(dbinfo, ValidateLocationMetadata, 1500.0)");
+					    .log("runTest: calling auditStorageCorrectness(dbinfo, ValidateLocationMetadata, 1500.0)");
 					co_await timeoutError(auditStorageCorrectness(dbInfo, AuditType::ValidateLocationMetadata), 1500.0);
 
 					TraceEvent("AuditStorageCorrectnessLocationMetadataDone");
 					TraceEvent("TestProgress")
-					    .detailf(
-					        "Detail",
-					        "runTest: calling auditStorageCorrectness(dbinfo, ValidateSTorageServerShard, 1500.0)");
+					    .log("runTest: calling auditStorageCorrectness(dbinfo, ValidateSTorageServerShard, 1500.0)");
 					co_await timeoutError(auditStorageCorrectness(dbInfo, AuditType::ValidateStorageServerShard),
 					                      1500.0);
 					TraceEvent("AuditStorageCorrectnessStorageServerShardDone");
-					TraceEvent("TestProgress").detailf("Detail", "runTest: storage audits completed.");
+					TraceEvent("TestProgress").log("runTest: storage audits completed.");
 				} catch (Error& e) {
 					ok = false;
 					TraceEvent(SevError, "TestFailure")
@@ -2243,8 +2231,7 @@ Future<bool> runTest(Database cx,
 
 	TraceEvent(ok ? SevInfo : SevWarnAlways, "TestResults").detail("Workload", spec.title).detail("Passed", (int)ok);
 	TraceEvent("TestProgress")
-	    .detailf(
-	        "Detail", "runTest: Workload [%s] passed: [%s]", spec.title.toString().c_str(), (ok ? "TRUE" : "FALSE"));
+	    .log("runTest: Workload [%s] passed: [%s]", spec.title.toString().c_str(), (ok ? "TRUE" : "FALSE"));
 
 	if (ok) {
 		passCount++;
@@ -2254,16 +2241,14 @@ Future<bool> runTest(Database cx,
 
 	printf("%d test clients passed; %d test clients failed\n", testResults.successes, testResults.failures);
 	TraceEvent("TestProgress")
-	    .detailf("Detail",
-	             "runTest: [%d] test clients passed; [%d] test clients failed",
-	             testResults.successes,
-	             testResults.failures);
+	    .log(
+	        "runTest: [%d] test clients passed; [%d] test clients failed", testResults.successes, testResults.failures);
 
 	if (spec.useDB && spec.clearAfterTest) {
 		Error clearErr;
 		try {
 			TraceEvent("TesterClearingDatabase").log();
-			TraceEvent("TestProgress").detailf("Detail", "runTest: cleaning database via clearData(cx, 1000.0)");
+			TraceEvent("TestProgress").log("runTest: cleaning database via clearData(cx, 1000.0)");
 			co_await timeoutError(clearData(cx), 1000.0);
 		} catch (Error& e) {
 			TraceEvent(SevError, "ErrorClearingDatabaseAfterTest").error(e);
@@ -2794,7 +2779,7 @@ Future<Void> disableConnectionFailuresAfter(double seconds, std::string context)
  *
  * NOTE: this assumes that referenced objects will outlive all suspension points encounted by this function.
  *
- * Returns a future which will be set after all tests finished.
+ * Rturns a future which will be set after all tests finished.
  */
 Future<Void> runTests7(Reference<AsyncVar<Optional<struct ClusterControllerFullInterface>>> cc,
                        Reference<AsyncVar<Optional<struct ClusterInterface>>> ci,
@@ -2881,10 +2866,9 @@ Future<Void> runTests7(Reference<AsyncVar<Optional<struct ClusterControllerFullI
 	fmt::print("useDB: {}\n", useDB);
 
 	TraceEvent("TestProgress")
-	    .detailf("Detail",
-	             "runTests7: startingConfiguration: [%s]; useDB: [%s]",
-	             startingConfiguration.toString().c_str(),
-	             (useDB ? "TRUE" : "FALSE"));
+	    .log("runTests7: startingConfiguration: [%s]; useDB: [%s]",
+	         startingConfiguration.toString().c_str(),
+	         (useDB ? "TRUE" : "FALSE"));
 
 	// If this is important it should be in the trace file also.  Who wants to read two places
 	// when we could be reading just one?
@@ -2980,8 +2964,7 @@ Future<Void> runTests7(Reference<AsyncVar<Optional<struct ClusterControllerFullI
 	}
 
 	bool runPretestChecks = (useDB && waitForQuiescenceBegin);
-	TraceEvent("TestProgress")
-	    .detailf("Detail", "runTests7: doing PreTestChecks? [%s]", (runPretestChecks ? "TRUE" : "FALSE"));
+	TraceEvent("TestProgress").log("runTests7: doing PreTestChecks? [%s]", (runPretestChecks ? "TRUE" : "FALSE"));
 
 	if (runPretestChecks) {
 		TraceEvent("TesterStartingPreTestChecks")
@@ -3043,7 +3026,7 @@ Future<Void> runTests7(Reference<AsyncVar<Optional<struct ClusterControllerFullI
 		repairDataCenter = reconfigure;
 	}
 
-	TraceEvent("TestProgress").detailf("Detail", "runTests7: going to run [%d] tests", tests.size());
+	TraceEvent("TestProgress").log("runTests7: going to run [%d] tests", tests.size());
 	// Also emit legacy log:
 	TraceEvent("TestsExpectedToPass").detail("Count", tests.size());
 
@@ -3051,26 +3034,22 @@ Future<Void> runTests7(Reference<AsyncVar<Optional<struct ClusterControllerFullI
 	std::unique_ptr<KnobProtectiveGroup> knobProtectiveGroup;
 	for (; idx < tests.size(); idx++) {
 		printf("Run test:%s start\n", tests[idx].title.toString().c_str());
-		TraceEvent("TestProgress")
-		    .detailf("Detail", "runTests7: starting test [%s]", tests[idx].title.toString().c_str());
+		TraceEvent("TestProgress").log("runTests7: starting test [%s]", tests[idx].title.toString().c_str());
 		knobProtectiveGroup = std::make_unique<KnobProtectiveGroup>(tests[idx].overrideKnobs);
 		co_await success(runTest(cx, testers, tests[idx], dbInfo, &consistencyScanState));
 		knobProtectiveGroup.reset(nullptr);
 		printf("Run test:%s Done.\n", tests[idx].title.toString().c_str());
-		TraceEvent("TestProgress")
-		    .detailf("Detail", "runTests7: done running test [%s]", tests[idx].title.toString().c_str());
+		TraceEvent("TestProgress").log("runTests7: done running test [%s]", tests[idx].title.toString().c_str());
 	}
 
 	printf("\n%d tests passed; %d tests failed.\n", passCount, failCount);
-	TraceEvent("TestProgress")
-	    .detailf("Detail", "runTests7: [%d] tests passed; [%d] tests failed.", passCount, failCount);
+	TraceEvent("TestProgress").log("runTests7: [%d] tests passed; [%d] tests failed.", passCount, failCount);
 
 	bool ranConsistencyScan = false;
 	if (useDB) {
 		if (waitForQuiescenceEnd) {
 			TraceEvent("TestProgress")
-			    .detailf("Detail",
-			             "runTests7: useDB && waitForQuiescenceEnd ==> invoking checkConsistencyScanAfterTest()");
+			    .log("runTests7: useDB && waitForQuiescenceEnd ==> invoking checkConsistencyScanAfterTest()");
 			printf("Waiting for DD to end...\n");
 			TraceEvent("QuietDatabaseEndStart");
 			try {
@@ -3090,9 +3069,9 @@ Future<Void> runTests7(Reference<AsyncVar<Optional<struct ClusterControllerFullI
 		}
 	}
 	if (ranConsistencyScan) {
-		TraceEvent("TestProgress").detailf("Detail", "runTests7: finished running consistency scan");
+		TraceEvent("TestProgress").log("runTests7: finished running consistency scan");
 	} else {
-		TraceEvent("TestProgress").detailf("Detail", "runTests7: didn't run consistency scan");
+		TraceEvent("TestProgress").log("runTests7: didn't run consistency scan");
 	}
 
 	printf("\n");
@@ -3231,7 +3210,7 @@ Future<Void> runTests(Reference<IClusterConnectionRecord> const& connRecordUnsaf
 		actors.push_back(reportErrors(extractClusterInterface(cc, ci), "ExtractClusterInterface"));
 	}
 
-	TraceEvent("TestProgress").detailf("Detail", "runTests: invoked with whatToRun = [%d]", whatToRun);
+	TraceEvent("TestProgress").log("runTests: invoked with whatToRun = [%d]", whatToRun);
 
 	if (whatToRun == TEST_TYPE_CONSISTENCY_CHECK_URGENT) {
 		// Need not to set spec here. Will set spec when triggering workload
@@ -3325,7 +3304,7 @@ Future<Void> runTests(Reference<IClusterConnectionRecord> const& connRecordUnsaf
 		    "RunTests");
 	}
 
-	TraceEvent("TestProgress").detailf("Detail", "runTests: waiting for actors to finish.");
+	TraceEvent("TestProgress").log("runTests: waiting for actors to finish.");
 
 	Future<Void> actorsFuture = actors.empty() ? Never() : waitForAll(actors);
 	co_await Choose()

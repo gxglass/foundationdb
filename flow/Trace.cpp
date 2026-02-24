@@ -1169,6 +1169,22 @@ BaseTraceEvent& BaseTraceEvent::detailf(std::string key, const char* valueFormat
 	}
 	return *this;
 }
+
+BaseTraceEvent& BaseTraceEvent::log(const char* valueFormat, ...) {
+	if (enabled) {
+		va_list args;
+		va_start(args, valueFormat);
+		std::string value;
+		int result = vsformat(value, valueFormat, args);
+		va_end(args);
+
+		ASSERT(result >= 0);
+		std::string key = "LogMessage";
+		detailImpl(std::move(key), std::move(value));
+	}
+	return *this;
+}
+
 BaseTraceEvent& BaseTraceEvent::detailfNoMetric(std::string&& key, const char* valueFormat, ...) {
 	if (enabled) {
 		va_list args;
