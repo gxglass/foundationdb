@@ -2794,7 +2794,7 @@ Future<Void> disableConnectionFailuresAfter(double seconds, std::string context)
  *
  * NOTE: this assumes that referenced objects will outlive all suspension points encounted by this function.
  *
- * Rturns a future which will be set after all tests finished.
+ * Returns a future which will be set after all tests finished.
  */
 Future<Void> runTests7(Reference<AsyncVar<Optional<struct ClusterControllerFullInterface>>> cc,
                        Reference<AsyncVar<Optional<struct ClusterInterface>>> ci,
