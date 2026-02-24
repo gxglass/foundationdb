@@ -79,7 +79,7 @@ struct SuppressionMap {
 	int64_t checkAndInsertSuppression(std::string type, double duration, bool& suppress) {
 		ASSERT(g_network);
 		if (suppressionMap.size() >= FLOW_KNOBS->MAX_TRACE_SUPPRESSIONS) {
-			TraceEvent(SevWarnAlways, "ClearingTraceSuppressionMap").log();
+			TraceEvent(SevWarnAlways, "ClearingTraceSuppressionMap").writeEvent();
 			suppressionMap.clear();
 		}
 
@@ -1331,7 +1331,7 @@ BaseTraceEvent& BaseTraceEvent::backtrace(const std::string& prefix) {
 	return detail(prefix + "Backtrace", platform::get_backtrace());
 }
 
-void BaseTraceEvent::log() {
+void BaseTraceEvent::writeEvent() {
 	if (!logged) {
 		init();
 		++g_allocation_tracing_disabled;
@@ -1395,12 +1395,12 @@ void BaseTraceEvent::log() {
 BaseTraceEvent::~BaseTraceEvent() {
 	//  fprintf(stderr, "[%s:%d](%s) ~BaseTraceEvent [%p] \n", __FILE_NAME__, __LINE__, __FUNCTION__,
 	//          this);
-	log();
+	writeEvent();
 	if (failedLineOverflow == 1) {
 		failedLineOverflow = 2;
 		auto msg = fmt::format("Traced {} lines", tracedLines);
 		ProcessEvents::trigger("TracedTooManyLines"_sr, StringRef(msg), test_failed());
-		TraceEvent(SevError, "TracedTooManyLines").log();
+		TraceEvent(SevError, "TracedTooManyLines").writeEvent();
 		crashAndDie();
 	}
 }

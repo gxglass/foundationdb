@@ -419,7 +419,8 @@ public:
 
 	explicit operator bool() const { return static_cast<bool>(enabled); }
 
-	void log();
+	// Writes the event to the underlying log file.
+	void writeEvent();
 
 	void disable() { enabled.suppress(); } // Disables the trace event so it doesn't get logged
 
