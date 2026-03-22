@@ -1588,6 +1588,10 @@ ActorLineageSet& Net2::getActorLineageSet() {
 }
 #endif
 
+// TIP: ways to test this code:
+//
+// fdbserver -r test -f tests/noSim/RandomUnitTests.toml
+// fdbserver -r unittests -f noSim
 void Net2::run() {
 	TraceEvent::setNetworkThread();
 	TraceEvent("Net2Running").log();
