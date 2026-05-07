@@ -29,9 +29,6 @@ project(foundationdb
   HOMEPAGE_URL "http://www.foundationdb.org/"
   LANGUAGES C CXX ASM)
 
-if(WITH_SWIFT)
-  enable_language(Swift)
-endif()
 
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
@@ -345,12 +342,6 @@ if(CMAKE_EXPORT_COMPILE_COMMANDS AND WITH_PYTHON)
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/compile_commands.json
             ${CMAKE_CURRENT_BINARY_DIR}/compile_commands.json)
 
-  # A prebuild target ensures that all actors, Swift-generated headers, and
-  # Swift modules are built.
-  if(WITH_SWIFT)
-    add_custom_target(prebuild_for_ide ALL DEPENDS fdbserver_swift
-                                                   processed_compile_commands)
-  endif()
 endif()
 
 ###############################################################################

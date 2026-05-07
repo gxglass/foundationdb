@@ -24,14 +24,13 @@
 
 #include "fdbclient/KnobValue.h"
 #include "flow/Knobs.h"
-#include "flow/swift_support.h"
 #include "fdbrpc/Locality.h"
 #include "fdbclient/Knobs.h"
 
 // Disk queue
 static constexpr int _PAGE_SIZE = 4096;
 
-class SWIFT_CXX_IMMORTAL_SINGLETON_TYPE ServerKnobs : public KnobsImpl<ServerKnobs> {
+class ServerKnobs : public KnobsImpl<ServerKnobs> {
 public:
 	bool ALLOW_DANGEROUS_KNOBS;
 
@@ -1333,9 +1332,6 @@ public:
 	double IDEMPOTENCY_ID_IN_MEMORY_LIFETIME;
 	double IDEMPOTENCY_IDS_CLEANER_POLLING_INTERVAL;
 	double IDEMPOTENCY_IDS_MIN_AGE_SECONDS;
-
-	// Swift: Enable the Swift runtime hooks and use Swift implementations where possible
-	bool FLOW_WITH_SWIFT;
 
 	bool BULK_LOAD_USE_SST_INGEST; // Enable direct SST file ingestion for RocksDB storage engines
 

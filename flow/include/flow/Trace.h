@@ -275,7 +275,7 @@ inline constexpr AuditedEvent operator""_audit(const char* eventType, size_t len
 // This class is not intended to be used directly. Instead, this type is returned from most calls on trace events
 // (e.g. detail). This is done to disallow calling suppression functions anywhere but first in a chained sequence of
 // trace event function calls.
-struct SWIFT_CXX_IMPORT_OWNED BaseTraceEvent {
+struct BaseTraceEvent {
 	BaseTraceEvent(BaseTraceEvent&& ev);
 	BaseTraceEvent& operator=(BaseTraceEvent&& ev);
 
@@ -480,7 +480,7 @@ protected:
 
 // The TraceEvent class provides the implementation for BaseTraceEvent. The only functions that should be implemented
 // here are those that must be called first in a trace event call sequence, such as the suppression functions.
-struct SWIFT_CXX_IMPORT_OWNED TraceEvent : public BaseTraceEvent {
+struct TraceEvent : public BaseTraceEvent {
 	TraceEvent() {}
 	TraceEvent(const char* type, UID id = UID()); // Assumes SevInfo severity
 	TraceEvent(Severity, const char* type, UID id = UID());
@@ -562,9 +562,6 @@ struct EventCacheHolder : public ReferenceCounted<EventCacheHolder> {
 struct NetworkAddress;
 template <class T>
 class Optional;
-
-using OptionalStdString = Optional<std::string>;
-using OptionalInt64 = Optional<int64_t>;
 
 void openTraceFile(const Optional<NetworkAddress>& na,
                    uint64_t rollsize,

@@ -33,13 +33,8 @@
 
 #include <random>
 
-// FIXME: Remove once https://github.com/apple/swift/issues/61620 is fixed.
-#define SWIFT_CXX_REF_DETERMINISTICRANDOM                                                                              \
-	__attribute__((swift_attr("import_reference"))) __attribute__((swift_attr("retain:addref_DeterministicRandom")))   \
-	__attribute__((swift_attr("release:delref_DeterministicRandom")))
-
-class SWIFT_CXX_REF_DETERMINISTICRANDOM DeterministicRandom final : public IRandom,
-                                                                    public ReferenceCounted<DeterministicRandom> {
+class DeterministicRandom final : public IRandom,
+                                  public ReferenceCounted<DeterministicRandom> {
 private:
 	// Use boost::random::mt19937 to get consistent output across
 	// different compilers and therefore across different C++ standard
@@ -72,15 +67,5 @@ public:
 	void addref() override;
 	void delref() override;
 };
-
-// FIXME: Remove once https://github.com/apple/swift/issues/61620 is fixed.
-inline void addref_DeterministicRandom(DeterministicRandom* ptr) {
-	addref(ptr);
-}
-
-// FIXME: Remove once https://github.com/apple/swift/issues/61620 is fixed.
-inline void delref_DeterministicRandom(DeterministicRandom* ptr) {
-	delref(ptr);
-}
 
 #endif

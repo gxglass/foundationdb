@@ -136,7 +136,7 @@ FutureErrorOr<T, Void> errorOr(FutureIgnore<T> future) {
 // Unlike Future<T>, awaiting AsyncResult<T> produces T by value so expensive
 // payloads do not need an extra copy at the await site.
 template <class T>
-class SWIFT_SENDABLE AsyncResult {
+class AsyncResult {
 public:
 	static_assert(!std::is_void_v<T>, "Use AsyncResult<Void> instead of AsyncResult<void>");
 	using Element = T;

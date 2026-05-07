@@ -31,18 +31,9 @@
 #include "fdbclient/Notified.h"
 #include "fdbclient/StorageServerInterface.h"
 #include "fdbserver/core/ResolverInterface.h"
-#include "flow/swift_support.h"
-
-#ifdef WITH_SWIFT
-#include "flow/swift_future_support.h"
-#endif /* WITH_SWIFT */
 
 using DBRecoveryCount = uint64_t;
-
-// A concrete type that can be referenced (in the context of Optional<set<Tag>>) in Swift.
 using SetTag = std::set<Tag>;
-using OptionalSetTag = Optional<SetTag>;
-using OptionalInt64 = Optional<int64_t>;
 
 struct MasterInterface {
 	constexpr static FileIdentifier file_identifier = 5979145;
@@ -145,7 +136,7 @@ struct GetCommitVersionReply {
 	}
 };
 
-struct SWIFT_CXX_IMPORT_OWNED GetCommitVersionRequest {
+struct GetCommitVersionRequest {
 	constexpr static FileIdentifier file_identifier = 16683181;
 	SpanContext spanContext;
 	uint64_t requestNum;
@@ -176,7 +167,7 @@ struct GetTLogPrevCommitVersionReply {
 	}
 };
 
-struct SWIFT_CXX_IMPORT_OWNED UpdateRecoveryDataRequest {
+struct UpdateRecoveryDataRequest {
 	constexpr static FileIdentifier file_identifier = 13605417;
 	Version recoveryTransactionVersion;
 	Version lastEpochEnd;
@@ -210,7 +201,7 @@ struct SWIFT_CXX_IMPORT_OWNED UpdateRecoveryDataRequest {
 	}
 };
 
-struct SWIFT_CXX_IMPORT_OWNED ReportRawCommittedVersionRequest {
+struct ReportRawCommittedVersionRequest {
 	constexpr static FileIdentifier file_identifier = 1853148;
 	Version version;
 	bool locked;

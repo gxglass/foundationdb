@@ -3871,13 +3871,7 @@ void profileHandler(int sig) {
 
 	// We can only read the check thread time in a signal handler if the atomic is lock free.
 	// We can't get the time from a timer() call because it's not signal safe.
-#ifndef WITH_SWIFT
 	ps->timestamp = checkThreadTime.is_lock_free() ? checkThreadTime.load() : 0;
-#else
-	// FIXME: problem with Swift build: lib/libflow.a(Platform.cpp.o):Platform.cpp:function
-	// profileHandler(int): error: undefined reference to '__atomic_is_lock_free'
-	ps->timestamp = 0;
-#endif /* WITH_SWIFT */
 
 #if defined(USE_SANITIZER)
 	// In sanitizer builds the workaround implemented in SignalSafeUnwind.cpp is disabled

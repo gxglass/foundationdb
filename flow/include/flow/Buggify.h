@@ -108,7 +108,7 @@ inline bool getGeneralSBVar(const char* file, const int line) {
 	return activated;
 }
 
-inline bool buggify(const char* _Nonnull filename, int line) {
+inline bool buggify(const char* filename, int line) {
 	// SEE: BUGGIFY_WITH_PROB and BUGGIFY macros above.
 	return isGeneralBuggifyEnabled() && getGeneralSBVar(filename, line) &&
 	       deterministicRandom()->random01() < P_GENERAL_BUGGIFIED_SECTION_FIRES;

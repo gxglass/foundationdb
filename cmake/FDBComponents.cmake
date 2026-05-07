@@ -39,18 +39,6 @@ find_package(ZLIB REQUIRED)
 find_package(OpenSSL REQUIRED)
 add_compile_options(-DHAVE_OPENSSL)
 
-################################################################################
-# Swift Support
-################################################################################
-
-if (WITH_SWIFT)
-  message(DEBUG "Building with Swift")
-  add_definitions(-DWITH_SWIFT)
-  set(WITH_SWIFT ON)
-else()
-  message(DEBUG "Not building with Swift")
-  set(WITH_SWIFT OFF)
-endif()
 
 ################################################################################
 # Python Bindings
@@ -159,11 +147,11 @@ if(BUILD_SWIFT_BINDING AND NOT WITH_C_BINDING)
   message(WARNING "Swift binding depends on C binding, but C binding is not enabled")
 endif()
 
-if(NOT BUILD_SWIFT_BINDING OR NOT BUILD_C_BINDING OR OPEN_FOR_IDE OR NOT WITH_SWIFT)
+if(NOT BUILD_SWIFT_BINDING OR NOT BUILD_C_BINDING OR OPEN_FOR_IDE)
   set(WITH_SWIFT_BINDING OFF)
 else()
   find_program(SWIFT_EXECUTABLE swift)
-  if(SWIFT_EXECUTABLE AND CMAKE_Swift_COMPILER)
+  if(SWIFT_EXECUTABLE)
     # Check Swift version - require 6.1 or higher
     execute_process(
       COMMAND ${SWIFT_EXECUTABLE} --version
@@ -181,6 +169,7 @@ else()
         message(STATUS "Swift bindings require Swift 6.1 or higher (found ${SWIFT_VERSION})")
         set(WITH_SWIFT_BINDING OFF)
       else()
+        enable_language(Swift)
         set(WITH_SWIFT_BINDING ON)
       endif()
     else()
@@ -363,7 +352,6 @@ function(print_components)
   message(STATUS "Build Go bindings:                    ${WITH_GO_BINDING}")
   message(STATUS "Build Swift bindings:                 ${WITH_SWIFT_BINDING}")
   message(STATUS "Build Ruby bindings:                  ${WITH_RUBY_BINDING}")
-  message(STATUS "Build Swift (depends on Swift):       ${WITH_SWIFT}")
   message(STATUS "Build Documentation (make html):      ${WITH_DOCUMENTATION}")
   message(STATUS "Build Python sdist (make package):    ${WITH_PYTHON_BINDING}")
   message(STATUS "Configure CTest (depends on Python):  ${WITH_PYTHON}")
