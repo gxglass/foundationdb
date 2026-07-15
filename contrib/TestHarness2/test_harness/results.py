@@ -96,6 +96,10 @@ class EnsembleResults:
         )
 
         for cov, count in self.coverage:
+            # These are SummaryTree salience levels for THIS report's own output, NOT FDB trace
+            # severities. A "Severity 40" missed-non-rare probe here is not a SevError and fails no
+            # test run, ensemble, or CI -- see this module's header/footer. It only affects how this
+            # report renders the row and this report's own exit code (which nothing gates on).
             severity = 10
             if count <= self.ratio:
                 severity = 30 if cov.rare else 40

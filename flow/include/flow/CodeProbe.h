@@ -114,14 +114,18 @@ constexpr NoSim noSim;
 
 namespace decoration {
 
-// Code probes that currently (as of 9/25/2022) are not expected to show up in a 250k-test Joshua run
-// are marked as "rare." This indicates a testing bug, and these probes should either be removed or testing
-// coverage should be improved to hit them. Ideally, then, we should remove uses of this annotation in the
-// long-term. However, this annotation has been added to prevent further regressions in code coverage, so that
-// we can detect changes that fail to hit non-rare code probes.
+// Code probes that are not expected to show up in a large (e.g. 250k-test) Joshua run are marked as
+// "rare." A rare path is simply one seldom exercised in simulation; it can be more prone to latent
+// bugs, so it is worth extra scrutiny when reading or changing. Ideally coverage improves over time so
+// the annotation can eventually be dropped, but leaving a genuinely-rare path marked "rare" is fine.
 //
-// This should also hopefully help with debugging, because if a code probe is marked as rare, it means that this
-// is a case not likely hit in simulation, and it may be a case that is more prone to buggy behaviour.
+// IMPORTANT: an unhit or rarely-hit code probe fails NOTHING -- not a simulation run, a Joshua run, an
+// ensemble, or CI. Nothing gates on code-probe coverage. The annotation exists only so the opt-in
+// coverage reporter (contrib/TestHarness2, run by hand as `python3 -m test_harness.results`) can tell an
+// expected-rare miss from an unexpected one: it flags a missed "rare" probe as a warning and a missed
+// non-rare probe more prominently. The "Severity 40" that report prints for the latter is a display label
+// in its own output -- it is NOT an FDB trace SevError and fails no run. Removing "rare" or improving
+// coverage is a code-quality nicety, never an obligation and never a build/test gate.
 struct Rare {
 	constexpr static AnnotationType type = AnnotationType::Decoration;
 	void trace(struct ICodeProbe const*, BaseTraceEvent& evt, bool) const { evt.detail("Rare", true); }
