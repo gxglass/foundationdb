@@ -147,13 +147,14 @@ void ServerKnobs::initialize(Randomize randomize, ClientKnobs* clientKnobs, IsSi
 	init( MERGE_RELOCATION_PARALLELISM_PER_TEAM,                   6 ); if (randomize && BUGGIFY ) MERGE_RELOCATION_PARALLELISM_PER_TEAM = 1;
 	init( DD_QUEUE_MAX_KEY_SERVERS,                              100 ); // Do not buggify
 	init( DD_REBALANCE_PARALLELISM,                               50 );
-	// Hard cap on total relocations DD tracks (queued + in-flight). 1000 corresponds to a 500-server
-	// cluster with two concurrent shard moves per storage server.  We have observed large clusters doing
-	// 25-30GB in flight, or closer to 100 shards at a time, so this has plenty of margin of safety
-	// built in.  For simulation, we don't really know how many servers there are, but 10 seems like a good
+	// Hard cap on total relocations DD tracks (queued + in-flight). In theory, 1000 seems like a good default,
+	// corresponding to a 500-server cluster with two concurrent shard moves per storage server.
+	// In practice, this causes problems, and 10000 seems to work better, while still avoiding DD OOM
+	// territory (OOMs at 12GiB/process, doing 30k to 40k moves).
+	// For simulation, we don't really know how many servers there are, but 10 seems like a good
 	// guess (thus 20 moves).  Do not buggify this too small: testing under artificial scarcity results in
 	// uninteresting degenerate cases.
-	init( DD_MAX_PIPELINE_MOVES,                                1000 ); if( randomize && BUGGIFY ) DD_MAX_PIPELINE_MOVES = 20;
+	init( DD_MAX_PIPELINE_MOVES,                               10000 ); if( randomize && BUGGIFY ) DD_MAX_PIPELINE_MOVES = 20;
 	init( DD_REBALANCE_RESET_AMOUNT,                              30 );
 	init( INFLIGHT_PENALTY_HEALTHY,                              1.0 );
 	init( INFLIGHT_PENALTY_UNHEALTHY,                          500.0 );
